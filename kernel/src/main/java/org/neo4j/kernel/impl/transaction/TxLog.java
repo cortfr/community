@@ -36,6 +36,7 @@ import javax.transaction.xa.Xid;
 
 import org.neo4j.helpers.UTF8;
 import org.neo4j.kernel.impl.transaction.xaframework.DirectMappedLogBuffer;
+import org.neo4j.kernel.impl.transaction.xaframework.ForceMode;
 import org.neo4j.kernel.impl.transaction.xaframework.LogBuffer;
 
 // TODO: fixed sized logs (pre-initialize them)
@@ -188,7 +189,7 @@ public class TxLog
     {
         assertNotNull( globalId, "global id" );
         logBuffer.put( MARK_COMMIT ).put( (byte) globalId.length ).put( globalId );
-        logBuffer.force();
+        ForceMode.selected.force( logBuffer );
         recordCount++;
     }
 

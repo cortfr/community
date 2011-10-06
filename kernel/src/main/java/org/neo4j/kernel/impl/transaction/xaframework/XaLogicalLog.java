@@ -316,7 +316,7 @@ public class XaLogicalLog
         try
         {
             LogIoUtils.writeCommit( false, writeBuffer, identifier, txId, masterId );
-            writeBuffer.force();
+            ForceMode.selected.force( writeBuffer );
             cacheTxStartPosition( txId, masterId, startEntry );
         }
         catch ( IOException e )
@@ -393,7 +393,7 @@ public class XaLogicalLog
         try
         {
             LogIoUtils.writeCommit( true, writeBuffer, identifier, txId, masterId );
-            writeBuffer.force();
+            ForceMode.selected.force( writeBuffer );
             cacheTxStartPosition( txId, masterId, startEntry );
         }
         catch ( IOException e )
@@ -1371,7 +1371,7 @@ public class XaLogicalLog
                 xidIdent, nextTxId, masterId );
         LogIoUtils.writeLogEntry( commit, writeBuffer );
         // need to manually force since xaRm.commit will not do it (transaction marked as recovered)
-        writeBuffer.force();
+        ForceMode.selected.force( writeBuffer );
         Xid xid = startEntry.getXid();
         try
         {
