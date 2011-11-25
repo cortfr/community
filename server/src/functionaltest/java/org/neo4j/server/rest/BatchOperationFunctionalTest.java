@@ -25,6 +25,7 @@ import static org.junit.Assert.assertTrue;
 import java.util.List;
 import java.util.Map;
 
+import org.json.JSONException;
 import org.junit.Test;
 import org.neo4j.graphdb.Node;
 import org.neo4j.kernel.impl.annotations.Documented;
@@ -313,7 +314,7 @@ public class BatchOperationFunctionalTest extends AbstractRestFunctionalTestBase
                 .endObject()
             .endArray()
             .toString());
-        assertEquals(400, response.getStatus());
+        assertEquals(500, response.getStatus());
         Map<String, Object> res = JsonHelper.jsonToMap(response.getEntity());
 
         assertTrue(((String)res.get("message")).startsWith("Invalid JSON array in POST body"));
@@ -331,9 +332,58 @@ public class BatchOperationFunctionalTest extends AbstractRestFunctionalTestBase
 
         JaxRsResponse response = RestRequest.req().post(batchUri(), jsonString);
 
-        assertEquals(400, response.getStatus());
+        assertEquals(500, response.getStatus());
         assertEquals(originalNodeCount, countNodes());
 
+    }
+    
+    @Test
+    @Graph("\u4f8b\u5b50 has öäüÖÄÜß")
+    public void shouldHandleUnicodeGetCorrectly() throws JsonParseException, ClientHandlerException,
+            UniformInterfaceException, JSONException {
+        String asian = "\u4f8b\u5b50";
+        String german = "öäüÖÄÜß";
+        Node gnode = getNode( german );
+        Node anode = getNode( asian );
+        assertTrue( gen.get()
+                .expectedStatus( 200 )
+                .get( getNodeUri( anode ) )
+                .entity().contains(asian) );
+        assertTrue( gen.get()
+                .expectedStatus( 200 )
+                .get( getNodeUri( gnode ) )
+                .entity().contains(german) );
+        testBatch(anode, asian);
+        testBatch(gnode, german);
+    }
+
+    private void testBatch( Node anode, String asian )
+    {
+        String jsonString;
+        try
+        {
+            jsonString = new PrettyJSON()
+            .array()
+                .object()
+                    .key("method") .value("GET")
+                    .key("to")     .value("/node/"+anode.getId()+"/properties")
+                .endObject()
+            .endArray()
+            .toString();
+        String entity = gen.get()
+                .expectedStatus( 200 )
+                .payload( jsonString )
+                .post( batchUri() )
+                .entity();
+        assertTrue( entity.contains( asian) );
+
+        }
+        catch ( JSONException e )
+        {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+        }
+        
     }
 
     @Test
@@ -348,7 +398,7 @@ public class BatchOperationFunctionalTest extends AbstractRestFunctionalTestBase
 
         JaxRsResponse response = RestRequest.req().post(batchUri(), jsonString);
 
-        assertEquals(400, response.getStatus());
+        assertEquals(500, response.getStatus());
         assertEquals(originalNodeCount, countNodes());
 
     }
@@ -364,7 +414,7 @@ public class BatchOperationFunctionalTest extends AbstractRestFunctionalTestBase
 
         JaxRsResponse response = RestRequest.req().post(batchUri(), jsonString);
 
-        assertEquals(400, response.getStatus());
+        assertEquals(500, response.getStatus());
         assertEquals(originalNodeCount, countNodes());
 
     }
@@ -372,7 +422,7 @@ public class BatchOperationFunctionalTest extends AbstractRestFunctionalTestBase
     private int countNodes()
     {
         int count = 0;
-        for(Node node : graphdb.getAllNodes())
+        for(Node node : graphdb().getAllNodes())
         {
             count++;
         }

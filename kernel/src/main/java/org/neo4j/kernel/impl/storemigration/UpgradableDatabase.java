@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -39,33 +40,46 @@ import org.neo4j.kernel.impl.storemigration.legacystore.LegacyStore;
 
 public class UpgradableDatabase
 {
-    private Map<String, String> fileNamesToExpectedVersions = new HashMap<String, String>();
+    /*
+     * Initialized by the static block below.
+     */
+    public static final Map<String, String> fileNamesToExpectedVersions;
 
-    public UpgradableDatabase()
+    static
     {
-        fileNamesToExpectedVersions.put( NeoStore.DEFAULT_NAME, LegacyStore.FROM_VERSION );
-        fileNamesToExpectedVersions.put( "neostore.nodestore.db", LegacyNodeStoreReader.FROM_VERSION );
-        fileNamesToExpectedVersions.put( "neostore.propertystore.db", LegacyPropertyStoreReader.FROM_VERSION );
-        fileNamesToExpectedVersions.put( "neostore.propertystore.db.arrays", LegacyDynamicStoreReader.FROM_VERSION_ARRAY );
-        fileNamesToExpectedVersions.put( "neostore.propertystore.db.index", LegacyPropertyIndexStoreReader.FROM_VERSION );
-        fileNamesToExpectedVersions.put( "neostore.propertystore.db.index.keys", LegacyDynamicStoreReader.FROM_VERSION_STRING );
-        fileNamesToExpectedVersions.put( "neostore.propertystore.db.strings", LegacyDynamicStoreReader.FROM_VERSION_STRING );
-        fileNamesToExpectedVersions.put( "neostore.relationshipstore.db", LegacyRelationshipStoreReader.FROM_VERSION );
-        fileNamesToExpectedVersions.put( "neostore.relationshiptypestore.db", LegacyRelationshipTypeStoreReader.FROM_VERSION );
-        fileNamesToExpectedVersions.put( "neostore.relationshiptypestore.db.names", LegacyDynamicStoreReader.FROM_VERSION_STRING );
+        Map<String, String> before = new HashMap<String, String>();
+        before.put( NeoStore.DEFAULT_NAME, LegacyStore.FROM_VERSION );
+        before.put( "neostore.nodestore.db", LegacyNodeStoreReader.FROM_VERSION );
+        before.put( "neostore.propertystore.db",
+                LegacyPropertyStoreReader.FROM_VERSION );
+        before.put( "neostore.propertystore.db.arrays",
+                LegacyDynamicStoreReader.FROM_VERSION_ARRAY );
+        before.put( "neostore.propertystore.db.index",
+                LegacyPropertyIndexStoreReader.FROM_VERSION );
+        before.put( "neostore.propertystore.db.index.keys",
+                LegacyDynamicStoreReader.FROM_VERSION_STRING );
+        before.put( "neostore.propertystore.db.strings",
+                LegacyDynamicStoreReader.FROM_VERSION_STRING );
+        before.put( "neostore.relationshipstore.db",
+                LegacyRelationshipStoreReader.FROM_VERSION );
+        before.put( "neostore.relationshiptypestore.db",
+                LegacyRelationshipTypeStoreReader.FROM_VERSION );
+        before.put( "neostore.relationshiptypestore.db.names",
+                LegacyDynamicStoreReader.FROM_VERSION_STRING );
+        fileNamesToExpectedVersions = Collections.unmodifiableMap( before );
     }
 
-    public void checkUpgradeable( File storeFile )
+    public void checkUpgradeable( File neoStoreFile )
     {
-        if (!storeFilesUpgradeable( storeFile ))
+        if (!storeFilesUpgradeable( neoStoreFile ))
         {
             throw new StoreUpgrader.UnableToUpgradeException( "Not all store files match the version required for successful upgrade" );
         }
     }
 
-    public boolean storeFilesUpgradeable( File storeFile )
+    public boolean storeFilesUpgradeable( File neoStoreFile )
     {
-        File storeDirectory = storeFile.getParentFile();
+        File storeDirectory = neoStoreFile.getParentFile();
         for ( String fileName : fileNamesToExpectedVersions.keySet() )
         {
             String expectedVersion = fileNamesToExpectedVersions.get( fileName );
@@ -73,7 +87,11 @@ public class UpgradableDatabase
             byte[] expectedVersionBytes = UTF8.encode( expectedVersion );
             try
             {
-                fileChannel = new RandomAccessFile( new File( storeDirectory, fileName ), "r" ).getChannel();
+                File storeFile = new File( storeDirectory, fileName );
+                if (!storeFile.exists()) {
+                    return false;
+                }
+                fileChannel = new RandomAccessFile( storeFile, "r" ).getChannel();
                 fileChannel.position( fileChannel.size() - expectedVersionBytes.length );
                 byte[] foundVersionBytes = new byte[expectedVersionBytes.length];
                 fileChannel.read( ByteBuffer.wrap( foundVersionBytes ) );

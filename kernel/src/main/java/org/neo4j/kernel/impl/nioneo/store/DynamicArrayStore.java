@@ -37,11 +37,17 @@ public class DynamicArrayStore extends AbstractDynamicStore
 {
     // store version, each store ends with this string (byte encoded)
     static final String VERSION = "ArrayPropertyStore v0.A.0";
-    static final String TYPE_DESCRIPTOR = "ArrayPropertyStore";
+    public static final String TYPE_DESCRIPTOR = "ArrayPropertyStore";
 
     public DynamicArrayStore( String fileName, Map<?,?> config, IdType idType )
     {
         super( fileName, config, idType );
+    }
+    
+    @Override
+    public void accept( RecordStore.Processor processor, DynamicRecord record )
+    {
+        processor.processArray( this, record );
     }
 
     @Override
@@ -51,9 +57,9 @@ public class DynamicArrayStore extends AbstractDynamicStore
     }
 
     public static void createStore( String fileName, int blockSize,
-            IdGeneratorFactory idGeneratorFactory )
+            IdGeneratorFactory idGeneratorFactory, FileSystemAbstraction fileSystem )
     {
-        createEmptyStore( fileName, blockSize, VERSION, idGeneratorFactory, IdType.ARRAY_BLOCK );
+        createEmptyStore( fileName, blockSize, VERSION, idGeneratorFactory, fileSystem, IdType.ARRAY_BLOCK );
     }
 
     private Collection<DynamicRecord> allocateFromNumbers( long startBlock, Object array )

@@ -26,7 +26,6 @@ import java.util.Map;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Relationship;
-import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.graphdb.TransactionFailureException;
 import org.neo4j.graphdb.event.KernelEventHandler;
@@ -77,12 +76,13 @@ public final class EmbeddedGraphDatabase extends AbstractGraphDatabase
      */
     public EmbeddedGraphDatabase( String storeDir, Map<String,String> params )
     {
-        this.graphDbImpl = new EmbeddedGraphDbImpl( storeDir, null, params, this,
+        super( storeDir );
+        this.graphDbImpl = new EmbeddedGraphDbImpl( this.getStoreDir(), null, params, this,
                 CommonFactories.defaultLockManagerFactory(),
                 CommonFactories.defaultIdGeneratorFactory(),
                 CommonFactories.defaultRelationshipTypeCreator(),
                 CommonFactories.defaultTxIdGeneratorFactory(),
-                CommonFactories.defaultTxFinishHook(),
+                CommonFactories.defaultTxHook(),
                 CommonFactories.defaultLastCommittedTxIdSetter(),
                 CommonFactories.defaultFileSystemAbstraction() );
     }
@@ -121,14 +121,9 @@ public final class EmbeddedGraphDatabase extends AbstractGraphDatabase
         return graphDbImpl.getReferenceNode();
     }
 
-    public void shutdown()
+    @Override protected void close()
     {
         graphDbImpl.shutdown();
-    }
-
-    public Iterable<RelationshipType> getRelationshipTypes()
-    {
-        return graphDbImpl.getRelationshipTypes();
     }
 
     /**
@@ -158,21 +153,9 @@ public final class EmbeddedGraphDatabase extends AbstractGraphDatabase
     }
 
     @Override
-    public boolean isReadOnly()
+    public KernelData getKernelData()
     {
-        return false;
-    }
-
-
-    @Override
-    public String getStoreDir()
-    {
-        return graphDbImpl.getStoreDir();
-    }
-
-    public Iterable<Node> getAllNodes()
-    {
-        return graphDbImpl.getAllNodes();
+        return graphDbImpl.getKernelData();
     }
 
     public KernelEventHandler registerKernelEventHandler(

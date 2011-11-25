@@ -22,7 +22,8 @@ define(
   ['./gremlin',
    './console',
    'ribcage/View',
-   'lib/backbone'], 
+   'lib/backbone',
+   'lib/jquery.putCursorAtEnd'], 
   (baseTemplate, consoleTemplate, View) ->
 
     class ConsoleView extends View
@@ -55,21 +56,24 @@ define(
           @consoleState.nextHistory()
 
       wrapperClicked : (ev) =>
+        @focusOnInputField()
+        
+      focusOnInputField :->
         $("#console-input").focus()
+        $("#console-input").putCursorAtEnd()
 
       renderConsole : ()=>
-        neo4j.log  @consoleState.get "showMultilineHelp" or false
         $("#console-base",@el).html consoleTemplate(
           lines : @consoleState.get "lines"
           prompt : @consoleState.get "prompt"
           showPrompt : @consoleState.get "showPrompt"
           showMultilineHelp : @consoleState.get "showMultilineHelp" or false
           current : @lang
-          promptPrefix : @lang)
+          promptPrefix : @consoleState.get "promptPrefix")
         
         @delegateEvents()
-        $("#console-input").focus()
         @scrollToBottomOfConsole()
+        @focusOnInputField()
         
       scrollToBottomOfConsole : () =>
         wrap = $("#console",@el)

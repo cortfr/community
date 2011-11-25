@@ -21,7 +21,6 @@ package org.neo4j.kernel.impl.transaction.xaframework;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.ReadableByteChannel;
@@ -37,7 +36,11 @@ import javax.transaction.xa.XAException;
 import javax.transaction.xa.Xid;
 
 import org.neo4j.helpers.Exceptions;
+import org.neo4j.helpers.Pair;
 import org.neo4j.kernel.impl.cache.LruCache;
+import org.neo4j.kernel.impl.nioneo.store.FileSystemAbstraction;
+import org.neo4j.kernel.impl.transaction.xaframework.LogEntry.Commit;
+import org.neo4j.kernel.impl.transaction.xaframework.LogEntry.Start;
 import org.neo4j.kernel.impl.util.ArrayMap;
 import org.neo4j.kernel.impl.util.BufferedFileChannel;
 import org.neo4j.kernel.impl.util.FileUtils;
@@ -93,7 +96,6 @@ public class XaLogicalLog
     private boolean autoRotate = true;
     private long rotateAtSize = 25*1024*1024; // 25MB
 
-    private final String storeDir;
     private final LogBufferFactory logBufferFactory;
     private boolean doingRecovery;
     private long lastRecoveredTx = -1;
@@ -105,20 +107,22 @@ public class XaLogicalLog
             new LruCache<Long, TxPosition>( "Tx start position cache", 10000, null );
     private final LruCache<Long /*log version*/, Long /*last committed tx*/> logHeaderCache =
             new LruCache<Long, Long>( "Log header cache", 1000, null );
+    private final FileSystemAbstraction fileSystem;
 
     XaLogicalLog( String fileName, XaResourceManager xaRm, XaCommandFactory cf,
-        XaTransactionFactory xaTf, Map<Object,Object> config )
+            XaTransactionFactory xaTf, Map<Object, Object> config )
     {
         this.fileName = fileName;
         this.xaRm = xaRm;
         this.cf = cf;
         this.xaTf = xaTf;
         this.logBufferFactory = (LogBufferFactory) config.get( LogBufferFactory.class );
+        this.fileSystem = (FileSystemAbstraction) config.get( FileSystemAbstraction.class );
+
         log = Logger.getLogger( this.getClass().getName() + File.separator + fileName );
         sharedBuffer = ByteBuffer.allocateDirect( 9 + Xid.MAXGTRIDSIZE
             + Xid.MAXBQUALSIZE * 10 );
-        storeDir = (String) config.get( "store_dir" );
-        msgLog = StringLogger.getLogger( storeDir);
+        msgLog = (StringLogger) config.get( StringLogger.class );
 
         // We should turn keep-logs on if there are previous logs around,
         // this so that e.g. temporary shell sessions or operations don't create
@@ -129,9 +133,9 @@ public class XaLogicalLog
     synchronized void open() throws IOException
     {
         String activeFileName = fileName + ".active";
-        if ( !new File( activeFileName ).exists() )
+        if ( !fileSystem.fileExists( activeFileName ) )
         {
-            if ( new File( fileName ).exists() )
+            if ( fileSystem.fileExists( fileName ) )
             {
                 // old < b8 xaframework with no log rotation and we need to
                 // do recovery on it
@@ -145,8 +149,7 @@ public class XaLogicalLog
         }
         else
         {
-            FileChannel fc = new RandomAccessFile( activeFileName ,
-                "rw" ).getChannel();
+            FileChannel fc = fileSystem.open( activeFileName, "rw" );
             byte bytes[] = new byte[256];
             ByteBuffer buf = ByteBuffer.wrap( bytes );
             int read = fc.read( buf );
@@ -162,29 +165,20 @@ public class XaLogicalLog
             {
                 // clean
                 String newLog = getLog1FileName();
-                File file = new File( newLog );
-                if ( file.exists() )
-                {
-                    renameLogFileToRightVersion( getLog1FileName(), file.length() );
-                }
-                file = new File( getLog2FileName() );
-                if ( file.exists() )
-                {
-                    renameLogFileToRightVersion( getLog2FileName(), file.length() );
-                }
+                renameIfExists( newLog );
+                renameIfExists( getLog2FileName() );
                 open( newLog );
                 setActiveLog( LOG1 );
             }
             else if ( c == LOG1 )
             {
                 String newLog = getLog1FileName();
-                if ( !new File( newLog ).exists() )
+                if ( !fileSystem.fileExists( newLog ) )
                 {
                     throw new IllegalStateException(
                         "Active marked as 1 but no " + newLog + " exist" );
                 }
-                File otherLog = new File( getLog2FileName() );
-                if ( otherLog.exists() )
+                if ( fileSystem.fileExists( getLog2FileName() ) )
                 {
                     fixDualLogFiles( getLog1FileName(), getLog2FileName() );
                 }
@@ -194,13 +188,12 @@ public class XaLogicalLog
             else if ( c == LOG2 )
             {
                 String newLog = getLog2FileName();
-                if ( !new File( newLog ).exists() )
+                if ( !fileSystem.fileExists( newLog ) )
                 {
                     throw new IllegalStateException(
                         "Active marked as 2 but no " + newLog + " exist" );
                 }
-                File otherLog = new File( getLog1FileName() );
-                if ( otherLog.exists() )
+                if ( fileSystem.fileExists( getLog1FileName() ) )
                 {
                     fixDualLogFiles( getLog2FileName(), getLog1FileName() );
                 }
@@ -216,6 +209,14 @@ public class XaLogicalLog
         instantiateCorrectWriteBuffer();
     }
 
+    private void renameIfExists( String fileName ) throws IOException
+    {
+        if ( fileSystem.fileExists( fileName ) )
+        {
+            renameLogFileToRightVersion( fileName, fileSystem.getFileSize( fileName ) );
+        }
+    }
+
     private void instantiateCorrectWriteBuffer() throws IOException
     {
         writeBuffer = instantiateCorrectWriteBuffer( fileChannel );
@@ -228,7 +229,7 @@ public class XaLogicalLog
 
     private void open( String fileToOpen ) throws IOException
     {
-        fileChannel = new RandomAccessFile( fileToOpen, "rw" ).getChannel();
+        fileChannel = fileSystem.open( fileToOpen, "rw" );
         if ( fileChannel.size() != 0 )
         {
             nonCleanShutdown = true;
@@ -272,14 +273,15 @@ public class XaLogicalLog
 
     // returns identifier for transaction
     // [TX_START][xid[gid.length,bid.lengh,gid,bid]][identifier][format id]
-    public synchronized int start( Xid xid ) throws XAException
+    public synchronized int start( Xid xid, int masterId, int myId ) throws XAException
     {
         int xidIdent = getNextIdentifier();
         try
         {
             long position = writeBuffer.getFileChannelPosition();
-            LogEntry.Start start = new LogEntry.Start( xid, xidIdent, position );
-            LogIoUtils.writeStart( writeBuffer, xidIdent, xid );
+            long timeWritten = System.currentTimeMillis();
+            LogEntry.Start start = new LogEntry.Start( xid, xidIdent, masterId, myId, position, timeWritten );
+            LogIoUtils.writeStart( writeBuffer, xidIdent, xid, masterId, myId, timeWritten );
             xidIdentMap.put( xidIdent, start );
         }
         catch ( IOException e )
@@ -296,7 +298,13 @@ public class XaLogicalLog
         assert startEntry != null;
         try
         {
-            LogIoUtils.writePrepare( writeBuffer, identifier );
+            LogIoUtils.writePrepare( writeBuffer, identifier, System.currentTimeMillis() );
+            /*
+             * Make content visible to all readers of the file channel, so that prepared transactions
+             * can be extracted. Not really necessary, since getLogicalLogOrMyselfCommitted() looks for
+             * force()d content (which is forced by commit{One,Two}Phase()) and getLogicalLogOrMyselfPrepared()
+             * always calls writeOut(). Leaving it here for now.
+             */
             writeBuffer.writeOut();
         }
         catch ( IOException e )
@@ -307,7 +315,7 @@ public class XaLogicalLog
     }
 
     // [TX_1P_COMMIT][identifier]
-    public synchronized void commitOnePhase( int identifier, long txId, int masterId )
+    public synchronized void commitOnePhase( int identifier, long txId )
         throws XAException
     {
         LogEntry.Start startEntry = xidIdentMap.get( identifier );
@@ -315,9 +323,9 @@ public class XaLogicalLog
         assert txId != -1;
         try
         {
-            LogIoUtils.writeCommit( false, writeBuffer, identifier, txId, masterId );
+            LogIoUtils.writeCommit( false, writeBuffer, identifier, txId, System.currentTimeMillis() );
             ForceMode.selected.force( writeBuffer );
-            cacheTxStartPosition( txId, masterId, startEntry );
+            cacheTxStartPosition( txId, startEntry.getMasterId(), startEntry );
         }
         catch ( IOException e )
         {
@@ -341,7 +349,7 @@ public class XaLogicalLog
         }
 
         TxPosition result = new TxPosition( logVersion, masterId, startEntry.getIdentifier(),
-                startEntry.getStartPosition() );
+                startEntry.getStartPosition(), startEntry.getTimeWritten() );
         txStartPositionCache.put( txId, result );
         return result;
     }
@@ -384,7 +392,7 @@ public class XaLogicalLog
     }
 
     // [TX_2P_COMMIT][identifier]
-    public synchronized void commitTwoPhase( int identifier, long txId, int masterId )
+    public synchronized void commitTwoPhase( int identifier, long txId )
         throws XAException
     {
         LogEntry.Start startEntry = xidIdentMap.get( identifier );
@@ -392,9 +400,9 @@ public class XaLogicalLog
         assert txId != -1;
         try
         {
-            LogIoUtils.writeCommit( true, writeBuffer, identifier, txId, masterId );
+            LogIoUtils.writeCommit( true, writeBuffer, identifier, txId, System.currentTimeMillis() );
             ForceMode.selected.force( writeBuffer );
-            cacheTxStartPosition( txId, masterId, startEntry );
+            cacheTxStartPosition( txId, startEntry.getMasterId(), startEntry );
         }
         catch ( IOException e )
         {
@@ -594,17 +602,17 @@ public class XaLogicalLog
 
     private void fixDualLogFiles( String activeLog, String oldLog ) throws IOException
     {
-        FileChannel activeLogChannel = new RandomAccessFile( activeLog, "r" ).getChannel();
+        FileChannel activeLogChannel = fileSystem.open( activeLog, "r" );
         long[] activeLogHeader = LogIoUtils.readLogHeader( ByteBuffer.allocate( 16 ), activeLogChannel, false );
         activeLogChannel.close();
 
-        FileChannel oldLogChannel = new RandomAccessFile( oldLog, "r" ).getChannel();
+        FileChannel oldLogChannel = fileSystem.open( oldLog, "r" );
         long[] oldLogHeader = LogIoUtils.readLogHeader( ByteBuffer.allocate( 16 ), oldLogChannel, false );
         oldLogChannel.close();
 
         if ( oldLogHeader == null )
         {
-            if ( !FileUtils.deleteFile( new File( oldLog ) ) )
+            if ( !fileSystem.deleteFile( oldLog ) )
             {
                 throw new IOException( "Unable to delete " + oldLog );
             }
@@ -614,7 +622,7 @@ public class XaLogicalLog
             // we crashed in rotate after setActive but did not move the old log to the right name
             // (and we do not know if keepLogs is true or not so play it safe by keeping it)
             String newName = getFileName( oldLogHeader[0] );
-            if ( !FileUtils.renameFile( new File( oldLog ), new File( newName ) ) )
+            if ( !fileSystem.renameFile( oldLog, newName ) )
             {
                 throw new IOException( "Unable to rename " + oldLog + " to " + newName );
             }
@@ -623,7 +631,7 @@ public class XaLogicalLog
         {
             assert activeLogHeader[0] < oldLogHeader[0];
             // we crashed in rotate before setActive, do the rotate work again and delete old
-            if ( !FileUtils.deleteFile( new File( oldLog ) ) )
+            if ( !fileSystem.deleteFile( oldLog ) )
             {
                 throw new IOException( "Unable to delete " + oldLog );
             }
@@ -632,14 +640,12 @@ public class XaLogicalLog
 
     private void renameLogFileToRightVersion( String logFileName, long endPosition ) throws IOException
     {
-        File file = new File( logFileName );
-        if ( !file.exists() )
+        if ( !fileSystem.fileExists( logFileName ) )
         {
-            throw new IOException( "Logical log[" + logFileName +
-                "] not found" );
+            throw new IOException( "Logical log[" + logFileName + "] not found" );
         }
 
-        FileChannel channel = new RandomAccessFile( logFileName, "rw" ).getChannel();
+        FileChannel channel = fileSystem.open( logFileName, "rw" );
         long[] header = LogIoUtils.readLogHeader( ByteBuffer.allocate( 16 ), channel, false );
         try
         {
@@ -647,8 +653,7 @@ public class XaLogicalLog
         }
         catch ( IOException e )
         {
-            log.log( Level.WARNING,
-                "Failed to truncate log at correct size", e );
+            log.log( Level.WARNING, "Failed to truncate log at correct size", e );
         }
         channel.close();
         String newName;
@@ -661,9 +666,7 @@ public class XaLogicalLog
         {
             newName = getFileName( header[0] );
         }
-        File newFile = new File( newName );
-        boolean renamed = FileUtils.renameFile( file, newFile );
-        if ( !renamed )
+        if ( !fileSystem.renameFile( logFileName, newName ) )
         {
             throw new IOException( "Failed to rename log to: " + newName );
         }
@@ -671,17 +674,14 @@ public class XaLogicalLog
 
     private void deleteLogFile( String logFileName ) throws IOException
     {
-        File file = new File( logFileName );
-        if ( !file.exists() )
+        if ( !fileSystem.fileExists( logFileName ) )
         {
             throw new IOException( "Logical log[" + logFileName +
                 "] not found" );
         }
-        boolean deleted = FileUtils.deleteFile( file );
-        if ( !deleted )
+        if ( !fileSystem.deleteFile( logFileName ) )
         {
-            log.warning( "Unable to delete clean logical log[" + logFileName +
-                "]" );
+            log.warning( "Unable to delete clean logical log[" + logFileName + "]" );
         }
     }
 
@@ -772,13 +772,11 @@ public class XaLogicalLog
                 + "no records in logical log." );
             msgLog.logMessage( "No log version found for " + logFileName, true );
             fileChannel.close();
-            boolean success = FileUtils.renameFile( new File( logFileName ),
-                new File( logFileName + "_unknown_timestamp_" +
-                    System.currentTimeMillis() + ".log" ) );
+            boolean success = fileSystem.renameFile( logFileName,
+                    logFileName + "_unknown_timestamp_" + System.currentTimeMillis() + ".log" );
             assert success;
             fileChannel.close();
-            fileChannel = new RandomAccessFile( logFileName,
-                "rw" ).getChannel();
+            fileChannel = fileSystem.open( logFileName, "rw" );
             return;
         }
         logVersion = header[0];
@@ -909,11 +907,11 @@ public class XaLogicalLog
     public ReadableByteChannel getLogicalLog( long version, long position ) throws IOException
     {
         String name = getFileName( version );
-        if ( !new File( name ).exists() )
+        if ( !fileSystem.fileExists( name ) )
         {
             throw new IOException( "No such log version:" + version );
         }
-        FileChannel channel = new RandomAccessFile( name, "r" ).getChannel();
+        FileChannel channel = fileSystem.open( name, "r" );
         channel.position( position );
         return new BufferedFileChannel( channel );
     }
@@ -1078,7 +1076,7 @@ public class XaLogicalLog
             {
                 // Something is wrong with the cached tx start position for this (expected) tx,
                 // remove it from cache so that next request will have to bypass the cache
-//                txStartPositionCache.remove( nextExpectedTxId );
+                logHeaderCache.clear();
                 txStartPositionCache.clear();
                 msgLog.logMessage( fileName + ", " + e.getMessage() + ". Clearing tx start position cache" );
                 if ( e instanceof IOException ) throw (IOException) e;
@@ -1138,6 +1136,21 @@ public class XaLogicalLog
                 e.printStackTrace();
             }
         }
+
+        public LogEntry.Commit getLastCommitEntry()
+        {
+            return lastCommitEntry;
+        }
+
+        public long getLastTxChecksum()
+        {
+            return getLastStartEntry().getTimeWritten();
+        }
+
+        public Start getLastStartEntry()
+        {
+            return collector.getLastStartEntry();
+        }
     }
 
     public LogExtractor getLogExtractor( long startTxId, long endTxIdHint ) throws IOException
@@ -1147,17 +1160,17 @@ public class XaLogicalLog
 
     public static final int MASTER_ID_REPRESENTING_NO_MASTER = -1;
 
-    public synchronized int getMasterIdForCommittedTransaction( long txId ) throws IOException
+    public synchronized Pair<Integer, Long> getMasterIdForCommittedTransaction( long txId ) throws IOException
     {
         if ( txId == 1 )
         {
-            return MASTER_ID_REPRESENTING_NO_MASTER;
+            return Pair.of( MASTER_ID_REPRESENTING_NO_MASTER, 0L );
         }
 
         TxPosition cache = txStartPositionCache.get( txId );
         if ( cache != null )
         {
-            return cache.masterId;
+            return Pair.of( cache.masterId, cache.timeWritten );
         }
 
         LogExtractor extractor = getLogExtractor( txId, txId );
@@ -1165,7 +1178,7 @@ public class XaLogicalLog
         {
             if ( extractor.extractNext( NullLogBuffer.INSTANCE ) != -1 )
             {
-                return extractor.lastCommitEntry.getMasterId();
+                return Pair.of( extractor.getLastStartEntry().getMasterId(), extractor.getLastTxChecksum() );
             }
             throw new RuntimeException( "Unable to find commit entry for txId[" + txId + "]" );// in log[" + version + "]" );
         }
@@ -1175,6 +1188,17 @@ public class XaLogicalLog
         }
     }
 
+    /**
+     * Return a file channel over the log file for {@code version} positioned
+     * at {@code position}. If the log version is the current one all
+     * committed transactions are guaranteed to be present but nothing that
+     * hasn't been flushed yet.
+     *
+     * @param version The version of the log to get a channel over
+     * @param position The position to which to set the channel
+     * @return The channel
+     * @throws IOException If an IO error occurs when reading the log file
+     */
     public ReadableByteChannel getLogicalLogOrMyselfCommitted( long version, long position )
             throws IOException
     {
@@ -1183,7 +1207,7 @@ public class XaLogicalLog
             if ( version == logVersion )
             {
                 String currentLogName = getCurrentLogFileName();
-                FileChannel channel = new RandomAccessFile( currentLogName, "r" ).getChannel();
+                FileChannel channel = fileSystem.open( currentLogName, "r" );
                 channel.position( position );
                 return new BufferedFileChannel( channel );
             }
@@ -1199,6 +1223,17 @@ public class XaLogicalLog
         }
     }
 
+    /**
+     * Return a file channel over the log file for {@code version} positioned
+     * at {@code position}. If the log version is the current one all
+     * content is guaranteed to be present, including content just in the write
+     * buffer.
+     *
+     * @param version The version of the log to get a channel over
+     * @param position The position to which to set the channel
+     * @return The channel
+     * @throws IOException If an IO error occurs when reading the log file
+     */
     private ReadableByteChannel getLogicalLogOrMyselfPrepared( long version, long position )
         throws IOException
     {
@@ -1209,13 +1244,19 @@ public class XaLogicalLog
         else if ( version == logVersion )
         {
             String currentLogName = getCurrentLogFileName();
-            FileChannel channel = new RandomAccessFile( currentLogName, "r" ).getChannel();
+            FileChannel channel = fileSystem.open( currentLogName, "r" );
             channel = new BufferedFileChannel( channel );
-
-            // Combined with the writeBuffer in cases where a DirectMappedLogBuffer
-            // is used, on Windows or when memory mapping is turned off.
-            // Otherwise the channel is returned directly.
-            channel = logBufferFactory.combine( channel, writeBuffer );
+            /*
+             * this method is called **during** commmit{One,Two}Phase - i.e. before the log buffer
+             * is forced and in the case of 1PC without the writeOut() done in prepare (as in 2PC).
+             * So, we need to writeOut(). The content of the buffer is written out to the file channel
+             * so that the new channel returned above will see the new content. This logical log can
+             * continue using the writeBuffer like nothing happened - the data is in the channel and
+             * will eventually be forced.
+             *
+             * See SlaveTxIdGenerator#generate().
+             */
+            writeBuffer.writeOut();
             channel.position( position );
             return channel;
         }
@@ -1274,53 +1315,95 @@ public class XaLogicalLog
 
     public long getLogicalLogLength( long version )
     {
-        File file = new File( getFileName( version ) );
-        return file.exists() ? file.length() : -1;
+        return fileSystem.getFileSize( getFileName( version ) );
     }
 
     public boolean hasLogicalLog( long version )
     {
-        return new File( getFileName( version ) ).exists();
+        return fileSystem.fileExists( getFileName( version ) );
     }
 
     public boolean deleteLogicalLog( long version )
     {
-        File file = new File(getFileName( version ) );
-        return file.exists() ? FileUtils.deleteFile( file ) : false;
+        String file = getFileName( version );
+        return fileSystem.fileExists( file ) ? fileSystem.deleteFile( file ) : false;
     }
 
-    private class LogApplier
+    protected LogDeserializer getLogDeserializer(ReadableByteChannel byteChannel)
+    {
+        return new LogDeserializer( byteChannel );
+    }
+
+    protected class LogDeserializer
     {
         private final ReadableByteChannel byteChannel;
+        LogEntry.Start startEntry;
+        LogEntry.Commit commitEntry;
 
-        private LogEntry.Start startEntry;
-        private LogEntry.Commit commitEntry;
+        private final List<LogEntry> logEntries;
 
-        LogApplier( ReadableByteChannel byteChannel )
+        protected LogDeserializer( ReadableByteChannel byteChannel )
         {
             this.byteChannel = byteChannel;
+            this.logEntries = new LinkedList<LogEntry>();
         }
 
-        boolean readAndWriteAndApplyEntry( int newXidIdentifier ) throws IOException
+        public boolean readAndWriteAndApplyEntry( int newXidIdentifier )
+                throws IOException
         {
-            LogEntry entry = LogIoUtils.readEntry( sharedBuffer, byteChannel, cf );
-            if ( entry != null )
+            LogEntry entry = LogIoUtils.readEntry( sharedBuffer, byteChannel,
+                    cf );
+            if ( entry == null )
             {
-                entry.setIdentifier( newXidIdentifier );
-                if ( entry instanceof LogEntry.Commit )
+                try
                 {
-                    commitEntry = (LogEntry.Commit) entry;
-//                    msgLog.logMessage( "Applying external tx: " + ((LogEntry.Commit) entry).getTxId(), true );
+                    intercept( logEntries );
+                    apply();
+                    return false;
                 }
-                else if ( entry instanceof LogEntry.Start )
+                catch ( Error e )
                 {
-                    startEntry = (LogEntry.Start) entry;
+                    startEntry = null;
+                    commitEntry = null;
+                    throw e;
                 }
+            }
+            entry.setIdentifier( newXidIdentifier );
+            logEntries.add( entry );
+            if ( entry instanceof LogEntry.Commit )
+            {
+                assert startEntry != null;
+                commitEntry = (LogEntry.Commit) entry;
+            }
+            else if ( entry instanceof LogEntry.Start )
+            {
+                startEntry = (LogEntry.Start) entry;
+            }
+            return true;
+        }
+
+        protected void intercept( List<LogEntry> logEntries )
+        {
+            // default do nothing
+        }
+
+        private void apply() throws IOException
+        {
+            for ( LogEntry entry : logEntries )
+            {
                 LogIoUtils.writeLogEntry( entry, writeBuffer );
                 applyEntry( entry );
-                return true;
             }
-            return false;
+        }
+
+        protected Start getStartEntry()
+        {
+            return startEntry;
+        }
+
+        protected Commit getCommitEntry()
+        {
+            return commitEntry;
         }
     }
 
@@ -1352,7 +1435,7 @@ public class XaLogicalLog
 
         long logEntriesFound = 0;
         scanIsComplete = false;
-        LogApplier logApplier = new LogApplier( byteChannel );
+        LogDeserializer logApplier = getLogDeserializer( byteChannel );
         int xidIdent = getNextIdentifier();
         long startEntryPosition = writeBuffer.getFileChannelPosition();
         while ( logApplier.readAndWriteAndApplyEntry( xidIdent ) )
@@ -1360,7 +1443,7 @@ public class XaLogicalLog
             logEntriesFound++;
         }
         byteChannel.close();
-        LogEntry.Start startEntry = logApplier.startEntry;
+        LogEntry.Start startEntry = logApplier.getStartEntry();
         if ( startEntry == null )
         {
             throw new IOException( "Unable to find start entry" );
@@ -1368,7 +1451,7 @@ public class XaLogicalLog
         startEntry.setStartPosition( startEntryPosition );
 //        System.out.println( "applyTxWithoutTxId#before 1PC @ pos: " + writeBuffer.getFileChannelPosition() );
         LogEntry.OnePhaseCommit commit = new LogEntry.OnePhaseCommit(
-                xidIdent, nextTxId, masterId );
+                xidIdent, nextTxId, System.currentTimeMillis() );
         LogIoUtils.writeLogEntry( commit, writeBuffer );
         // need to manually force since xaRm.commit will not do it (transaction marked as recovered)
         ForceMode.selected.force( writeBuffer );
@@ -1406,7 +1489,7 @@ public class XaLogicalLog
 //        System.out.println( "applyFullTx#start @ pos: " + writeBuffer.getFileChannelPosition() );
         long logEntriesFound = 0;
         scanIsComplete = false;
-        LogApplier logApplier = new LogApplier( byteChannel );
+        LogDeserializer logApplier = getLogDeserializer( byteChannel );
         int xidIdent = getNextIdentifier();
         long startEntryPosition = writeBuffer.getFileChannelPosition();
         boolean successfullyApplied = false;
@@ -1420,12 +1503,12 @@ public class XaLogicalLog
         }
         finally
         {
-            if ( !successfullyApplied && logApplier.startEntry != null )
+            if ( !successfullyApplied && logApplier.getStartEntry() != null )
             {   // Unmap this identifier if tx not applied correctly
                 xidIdentMap.remove( xidIdent );
                 try
                 {
-                    xaRm.forget( logApplier.startEntry.getXid() );
+                    xaRm.forget( logApplier.getStartEntry().getXid() );
                 }
                 catch ( XAException e )
                 {
@@ -1435,13 +1518,14 @@ public class XaLogicalLog
         }
         byteChannel.close();
         scanIsComplete = true;
-        LogEntry.Start startEntry = logApplier.startEntry;
+        LogEntry.Start startEntry = logApplier.getStartEntry();
         if ( startEntry == null )
         {
             throw new IOException( "Unable to find start entry" );
         }
         startEntry.setStartPosition( startEntryPosition );
-        cacheTxStartPosition( logApplier.commitEntry.getTxId(), logApplier.commitEntry.getMasterId(), startEntry );
+        cacheTxStartPosition( logApplier.getCommitEntry().getTxId(),
+                startEntry.getMasterId(), startEntry );
 //        System.out.println( "applyFullTx#end @ pos: " + writeBuffer.getFileChannelPosition() );
         checkLogRotation();
     }
@@ -1489,8 +1573,7 @@ public class XaLogicalLog
                 writeBuffer.getFileChannelPosition(), true );
         long endPosition = writeBuffer.getFileChannelPosition();
         writeBuffer.force();
-        FileChannel newLog = new RandomAccessFile(
-            newLogFile, "rw" ).getChannel();
+        FileChannel newLog = fileSystem.open( newLogFile, "rw" );
         long lastTx = xaTf.getLastCommittedTx();
         LogIoUtils.writeLogHeader( sharedBuffer, (currentVersion + 1), lastTx );
         previousLogLastCommittedTx = lastTx;
@@ -1529,7 +1612,7 @@ public class XaLogicalLog
                     LogEntry.Start startEntry = xidIdentMap.get( entry.getIdentifier() );
                     LogEntry.Commit commitEntry = (LogEntry.Commit) entry;
                     TxPosition oldPos = txStartPositionCache.get( commitEntry.getTxId() );
-                    TxPosition newPos = cacheTxStartPosition( commitEntry.getTxId(), commitEntry.getMasterId(), startEntry, logVersion+1 );
+                    TxPosition newPos = cacheTxStartPosition( commitEntry.getTxId(), startEntry.getMasterId(), startEntry, logVersion+1 );
                     msgLog.logMessage( "Updated tx " + ((LogEntry.Commit) entry ).getTxId() +
                             " from " + oldPos + " to " + newPos );
                 }
@@ -1572,7 +1655,7 @@ public class XaLogicalLog
 
     private void assertFileDoesntExist( String file, String description ) throws IOException
     {
-        if ( new File( file ).exists() )
+        if ( fileSystem.fileExists( file ) )
         {
             throw new IOException( description + ": " + file + " already exist" );
         }
@@ -1606,8 +1689,7 @@ public class XaLogicalLog
         }
         ByteBuffer bb = ByteBuffer.wrap( new byte[4] );
         bb.asCharBuffer().put( c ).flip();
-        FileChannel fc = new RandomAccessFile( fileName + ".active" ,
-            "rw" ).getChannel();
+        FileChannel fc = fileSystem.open( fileName + ".active" , "rw" );
         int wrote = fc.write( bb );
         if ( wrote != 4 )
         {
@@ -1679,12 +1761,12 @@ public class XaLogicalLog
     {
         return getHistoryFileNamePattern( new File( fileName ).getName() );
     }
-    
+
     public static Pattern getHistoryFileNamePattern( String baseFileName )
     {
         return Pattern.compile( baseFileName + "\\.v\\d+" );
     }
-    
+
     public static long getHistoryLogVersion( File historyLogFile )
     {   // Get version based on the name
         String name = historyLogFile.getName();
@@ -1705,13 +1787,15 @@ public class XaLogicalLog
         final int masterId;
         final int identifier;
         final long position;
+        final long timeWritten;
 
-        private TxPosition( long version, int masterId, int identifier, long position )
+        private TxPosition( long version, int masterId, int identifier, long position, long timeWritten )
         {
             this.version = version;
             this.masterId = masterId;
             this.identifier = identifier;
             this.position = position;
+            this.timeWritten = timeWritten;
         }
 
         public boolean earlierThan( TxPosition other )
@@ -1732,6 +1816,8 @@ public class XaLogicalLog
     {
         LogEntry collect( LogEntry entry, LogBuffer target ) throws IOException;
 
+        LogEntry.Start getLastStartEntry();
+
         boolean hasInFutureQueue();
 
         int getIdentifier();
@@ -1740,6 +1826,7 @@ public class XaLogicalLog
     private static class KnownIdentifierCollector implements LogEntryCollector
     {
         private final int identifier;
+        private LogEntry.Start startEntry;
 
         KnownIdentifierCollector( int identifier )
         {
@@ -1755,6 +1842,10 @@ public class XaLogicalLog
         {
             if ( entry.getIdentifier() == identifier )
             {
+                if ( entry instanceof LogEntry.Start )
+                {
+                    startEntry = (Start) entry;
+                }
                 if ( target != null )
                 {
                     LogIoUtils.writeLogEntry( entry, target );
@@ -1769,6 +1860,12 @@ public class XaLogicalLog
         {
             return false;
         }
+
+        @Override
+        public LogEntry.Start getLastStartEntry()
+        {
+            return startEntry;
+        }
     }
 
     private static class KnownTxIdCollector implements LogEntryCollector
@@ -1778,6 +1875,7 @@ public class XaLogicalLog
         private int identifier;
         private final Map<Long, List<LogEntry>> futureQueue = new HashMap<Long, List<LogEntry>>();
         private long nextExpectedTxId;
+        private LogEntry.Start lastStartEntry;
 
         KnownTxIdCollector( long startTxId )
         {
@@ -1796,16 +1894,22 @@ public class XaLogicalLog
             return futureQueue.containsKey( nextExpectedTxId );
         }
 
+        @Override
+        public LogEntry.Start getLastStartEntry()
+        {
+            return lastStartEntry;
+        }
+
         public LogEntry collect( LogEntry entry, LogBuffer target ) throws IOException
         {
             if ( futureQueue.containsKey( nextExpectedTxId ) )
             {
                 List<LogEntry> list = futureQueue.remove( nextExpectedTxId++ );
+                lastStartEntry = (LogEntry.Start)list.get( 0 );
                 writeToBuffer( list, target );
                 return commitEntryOf( list );
             }
 
-//            boolean interesting = false;
             if ( entry instanceof LogEntry.Start )
             {
                 List<LogEntry> list = new LinkedList<LogEntry>();
@@ -1816,7 +1920,6 @@ public class XaLogicalLog
             {
                 long commitTxId = ((LogEntry.Commit) entry).getTxId();
                 if ( commitTxId < startTxId ) return null;
-//                interesting = true;
                 identifier = entry.getIdentifier();
                 List<LogEntry> entries = transactions.get( identifier );
                 if ( entries == null ) return null;
@@ -1837,6 +1940,7 @@ public class XaLogicalLog
 
                 writeToBuffer( entries, target );
                 nextExpectedTxId = commitTxId+1;
+                lastStartEntry = (LogEntry.Start)entries.get( 0 );
                 return entry;
             }
             else if ( entry instanceof LogEntry.Command || entry instanceof LogEntry.Prepare )

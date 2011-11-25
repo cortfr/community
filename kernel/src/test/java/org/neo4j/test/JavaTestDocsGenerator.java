@@ -57,14 +57,6 @@ public class JavaTestDocsGenerator extends AsciiDocGenerator
         super( title, "docs" );
     }
 
-    @Override
-    protected void writeEntity( FileWriter fw, String entity )
-            throws IOException
-    {
-        // TODO Auto-generated method stub
-
-    }
-
     public void document( String directory, String sectionName )
     {
         this.setSection( sectionName );
@@ -94,6 +86,12 @@ public class JavaTestDocsGenerator extends AsciiDocGenerator
             // TODO Auto-generated catch block
             e.printStackTrace();
         }
+    }
+
+    public void addImageSnippet( String tagName, String imageName, String title )
+    {
+        this.addSnippet( tagName, "\nimage:"+imageName+"["+title+"scaledwidth=75%]\n" );
+        
     }
 
     

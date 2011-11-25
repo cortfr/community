@@ -40,7 +40,7 @@ class GraphDatabaseTestBase extends JUnitSuite {
 
   @After
   def cleanUp() {
-    graph.shutdown()
+    if (graph != null) graph.shutdown()
   }
 
   def indexNode(n: Node, idxName: String, key: String, value: String) {
@@ -49,6 +49,15 @@ class GraphDatabaseTestBase extends JUnitSuite {
 
   def createNode(): Node = createNode(Map[String, Any]())
   def createNode(name:String): Node = createNode(Map[String, Any]("name"->name))
+  def createNode(props: Map[String, Any]): Node = {
+    inTx(() => {
+      val node = graph.createNode()
+
+      props.foreach((kv) => node.setProperty(kv._1, kv._2))
+      node
+    }).asInstanceOf[Node]
+  }
+  def createNode(values:(String,Any)*):Node = createNode(values.toMap)
 
   def inTx[T](f: () => T): T = {
     val tx = graph.beginTx
@@ -62,6 +71,8 @@ class GraphDatabaseTestBase extends JUnitSuite {
   }
 
   def nodeIds = nodes.map(_.getId).toArray
+
+  def relate(a:Node,b:Node): Relationship = relate(a,b,"REL")
 
   def relate(n1:Node, n2:Node, relType:String, name:String): Relationship = relate(n1,n2,relType, Map("name"->name))
 
@@ -94,12 +105,5 @@ class GraphDatabaseTestBase extends JUnitSuite {
   }
 
 
-  def createNode(props: Map[String, Any]): Node = {
-    inTx(() => {
-      val node = graph.createNode()
 
-      props.foreach((kv) => node.setProperty(kv._1, kv._2))
-      node
-    }).asInstanceOf[Node]
-  }
 }

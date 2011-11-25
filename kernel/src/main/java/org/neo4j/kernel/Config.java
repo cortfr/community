@@ -26,7 +26,6 @@ import java.util.Map;
 
 import javax.transaction.TransactionManager;
 
-import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.helpers.Args;
 import org.neo4j.kernel.impl.annotations.Documented;
 import org.neo4j.kernel.impl.cache.AdaptiveCacheManager;
@@ -44,8 +43,10 @@ import org.neo4j.kernel.impl.persistence.IdGenerator;
 import org.neo4j.kernel.impl.persistence.IdGeneratorModule;
 import org.neo4j.kernel.impl.persistence.PersistenceModule;
 import org.neo4j.kernel.impl.transaction.LockManager;
+import org.neo4j.kernel.impl.transaction.TxHook;
 import org.neo4j.kernel.impl.transaction.TxModule;
 import org.neo4j.kernel.impl.transaction.xaframework.TxIdGenerator;
+import org.neo4j.kernel.impl.util.StringLogger;
 
 /**
  * A non-standard configuration object.
@@ -129,18 +130,37 @@ public class Config
     /** Relative path for where the Neo4j storage information file is located */
     @Documented
     public static final String NEO_STORE = "neo_store";
+
     /**
      * The type of cache to use for nodes and relationships, one of [weak, soft,
      * none]
      */
     @Documented
     public static final String CACHE_TYPE = "cache_type";
+
     /**
      * The name of the Transaction Manager service to use as defined in the TM
      * service provider constructor, defaults to native.
      */
     @Documented
     public static final String TXMANAGER_IMPLEMENTATION = "tx_manager_impl";
+
+    /**
+     * Determines whether any TransactionInterceptors loaded will intercept
+     * prepared transactions before they reach the logical log. Defaults to
+     * false.
+     */
+    @Documented
+    public static final String INTERCEPT_COMMITTING_TRANSACTIONS = "intercept_committing_transactions";
+
+    /**
+     * Determines whether any TransactionInterceptors loaded will intercept
+     * externally received transactions (e.g. in HA) before they reach the
+     * logical log and are applied to the store. Defaults to false.
+     */
+    @Documented
+    public static final String INTERCEPT_DESERIALIZED_TRANSACTIONS = "intercept_deserialized_transactions";
+
     /**
      * Boolean (one of true,false) defining whether to allow a store upgrade
      * in case the current version of the database starts against an older store
@@ -165,10 +185,13 @@ public class Config
      */
     @Documented
     public static final String RELATIONSHIP_KEYS_INDEXABLE = "relationship_keys_indexable";
+
     /**
-     * A list of property names (comma separated) that will be ignored by the
-     * auto indexer.
-     * This applies to Nodes only.
+     * Boolean value (one of true, false) that controls the auto indexing
+     * feature for nodes. Setting to false shuts it down unconditionally,
+     * while true enables it for every property, subject to restrictions
+     * in the configuration.
+     * The default is false.
      */
     @Documented
     public static final String NODE_AUTO_INDEXING = "node_auto_indexing";
@@ -176,13 +199,26 @@ public class Config
     /**
      * Boolean value (one of true, false) that controls the auto indexing
      * feature for relationships. Setting to false shuts it down
-     * unconditionally, while true
-     * enables it for every property, subject to restrictions in the
-     * configuration.
+     * unconditionally, while true enables it for every property, subject
+     * to restrictions in the configuration.
      * The default is false.
      */
     @Documented
     public static final String RELATIONSHIP_AUTO_INDEXING = "relationship_auto_indexing";
+
+    /**
+     * Integer value that sets the maximum number of open lucene index searchers.
+     * The default is Integer.MAX_VALUE
+     */
+    @Documented
+    public static final String LUCENE_SEARCHER_CACHE_SIZE = "lucene_searcher_cache_size";
+
+    /**
+     * Integer value that sets the maximum number of open lucene index writers.
+     * The default is Integer.MAX_VALUE
+     */
+    @Documented
+    public static final String LUCENE_WRITER_CACHE_SIZE = "lucene_writer_cache_size";
 
     static final String LOAD_EXTENSIONS = "load_kernel_extensions";
 
@@ -203,11 +239,12 @@ public class Config
     private final RelationshipTypeCreator relTypeCreator;
 
     private final boolean readOnly;
+    private final boolean ephemeral;
     private final boolean backupSlave;
     private final IdGeneratorFactory idGeneratorFactory;
     private final TxIdGenerator txIdGenerator;
 
-    Config( GraphDatabaseService graphDb, String storeDir, StoreId storeId,
+    Config( AbstractGraphDatabase graphDb, StoreId storeId,
             Map<String, String> inputParams, KernelPanicEventGenerator kpe,
             TxModule txModule, LockManager lockManager,
             LockReleaser lockReleaser, IdGeneratorFactory idGeneratorFactory,
@@ -216,8 +253,9 @@ public class Config
             LastCommittedTxIdSetter lastCommittedTxIdSetter,
             FileSystemAbstraction fileSystem )
     {
-        this.storeDir = storeDir;
+        this.storeDir = graphDb.getStoreDir();
         this.inputParams = inputParams;
+        this.ephemeral = graphDb.isEphemeral();
         // Get the default params and override with the user supplied values
         this.params = getDefaultParams();
         this.params.putAll( inputParams );
@@ -238,7 +276,7 @@ public class Config
         graphDbModule = new GraphDbModule( graphDb, cacheManager, lockManager,
                 txModule.getTxManager(), idGeneratorModule.getIdGenerator(),
                 readOnly );
-        indexStore = new IndexStore( storeDir );
+        indexStore = new IndexStore( storeDir, fileSystem );
         params.put( IndexStore.class, indexStore );
 
         if ( storeId != null ) params.put( StoreId.class, storeId );
@@ -247,6 +285,8 @@ public class Config
         params.put( TransactionManager.class, txModule.getTxManager() );
         params.put( LastCommittedTxIdSetter.class, lastCommittedTxIdSetter );
         params.put( GraphDbModule.class, graphDbModule );
+        params.put( TxHook.class, txModule.getTxHook() );
+        params.put( StringLogger.class, graphDb.getMessageLog() );
     }
 
     public static Map<Object, Object> getDefaultParams()
@@ -346,6 +386,11 @@ public class Config
     {
         return readOnly;
     }
+    
+    public boolean isEphemeral()
+    {
+        return ephemeral;
+    }
 
     boolean isBackupSlave()
     {
@@ -391,7 +436,7 @@ public class Config
             }
         }
     }
-    
+
     public static boolean configValueContainsMultipleParameters( String configValue )
     {
         return configValue != null && configValue.contains( "=" );

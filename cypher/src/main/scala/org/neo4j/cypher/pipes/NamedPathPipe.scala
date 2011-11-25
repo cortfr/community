@@ -23,31 +23,60 @@ import org.neo4j.cypher.{PathImpl, SymbolTable}
 import org.neo4j.graphdb.{Path, PropertyContainer}
 import scala.collection.JavaConverters._
 import org.neo4j.cypher.commands._
+import collection.Seq
+import java.lang.String
 
 class NamedPathPipe(source: Pipe, path: NamedPath) extends Pipe {
+  def getFirstNode[U]: String = {
+    val firstNode = path.pathPattern.head match {
+      case RelatedTo(left, right, relName, x, xx, optional) => left
+      case VarLengthRelatedTo(pathName, start, end, minHops, maxHops, relType, direction, iterableRel, optional) => start
+      case ShortestPath(_, start, _, _, _, _, _) => start
+    }
+    firstNode
+  }
+
   def foreach[U](f: (Map[String, Any]) => U) {
 
     source.foreach(m => {
-      def get(x:String):PropertyContainer = m(x).asInstanceOf[PropertyContainer]
-      def getPath(x:String):Path = m(x).asInstanceOf[Path]
+      def get(x: String): PropertyContainer = m(x).asInstanceOf[PropertyContainer]
 
-      val firstNode = path.pathPattern.head match {
-        case RelatedTo(left, right, relName, x, xx, optional) => left
-        case VarLengthRelatedTo(pathName, start, end, minHops, maxHops, relType, direction, optional) => start
-        case ShortestPath(_, start, _, _, _, _, _) => start
-      }
+      val firstNode: String = getFirstNode
 
-      val p = Seq(get(firstNode)) ++ path.pathPattern.flatMap(p => p match {
-        case RelatedTo(left, right, relName, x, xx, optional) => Seq(get(relName), get(right))
-        case VarLengthRelatedTo(pathName, start, end, minHops, maxHops, relType, direction, optional) => getPath(pathName).iterator().asScala.toSeq.tail
-        case ShortestPath(pathName, _, _, _, _, _, _) => getPath(pathName).iterator().asScala.toSeq.tail
+      val p: Seq[PropertyContainer] = path.pathPattern.foldLeft(Seq(get(firstNode)))((soFar, p) => p match {
+        case RelatedTo(left, right, relName, x, xx, optional) => soFar ++ Seq(get(relName), get(right))
+        case VarLengthRelatedTo(pathName, start, end, minHops, maxHops, relType, direction, iterableRel, optional) => getPath(m, pathName, soFar)
+        case ShortestPath(pathName, _, _, _, _, _, _) => getPath(m, pathName, soFar)
       })
 
-      val pathImpl = new PathImpl(p: _*)
-
-      f( m + (path.pathName -> pathImpl) )
+      f(m + (path.pathName -> buildPath(p)))
     })
   }
 
+  private def buildPath(pieces: Seq[PropertyContainer]): Path =
+    if (pieces.contains(null))
+      null
+    else
+      new PathImpl(pieces: _*)
+
+  //WARNING: This method can return NULL
+  def getPath(m: Map[String, Any], key: String, soFar: Seq[PropertyContainer]): Seq[PropertyContainer] = {
+    val m1 = m(key)
+
+    if(m1 == null)
+      return Seq(null)
+
+    val path = m1.asInstanceOf[Path].iterator().asScala.toSeq
+    val pathTail = if (path.head == soFar.last) {
+      path.tail
+    } else {
+      path.reverse.tail
+    }
+
+    soFar ++ pathTail
+  }
+
   val symbols: SymbolTable = source.symbols.add(Seq(PathIdentifier(path.pathName)))
+
+  override def executionPlan(): String = source.executionPlan() + "\r\nExtractPath(" + path.pathName + " = " + path.pathPattern.mkString(", ") + ")"
 }

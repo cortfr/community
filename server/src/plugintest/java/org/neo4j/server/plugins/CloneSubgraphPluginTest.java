@@ -40,24 +40,24 @@ import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
-import org.neo4j.server.NeoServerWithEmbeddedWebServer;
+import org.neo4j.server.NeoServer;
 import org.neo4j.server.helpers.FunctionalTestHelper;
 import org.neo4j.server.helpers.ServerHelper;
 import org.neo4j.server.rest.JaxRsResponse;
 import org.neo4j.server.rest.RestRequest;
 import org.neo4j.server.rest.domain.JsonHelper;
 import org.neo4j.server.rest.domain.JsonParseException;
+import org.neo4j.test.server.ExclusiveServerTestBase;
 
 import com.sun.jersey.api.client.ClientHandlerException;
 import com.sun.jersey.api.client.UniformInterfaceException;
 
-public class CloneSubgraphPluginTest
+public class CloneSubgraphPluginTest extends ExclusiveServerTestBase
 {
-
     private static final RelationshipType KNOWS = DynamicRelationshipType.withName( "knows" );
     private static final RelationshipType WORKED_FOR = DynamicRelationshipType.withName( "worked_for" );
 
-    private static NeoServerWithEmbeddedWebServer server;
+    private static NeoServer server;
     private static FunctionalTestHelper functionalTestHelper;
 
     @BeforeClass
@@ -66,18 +66,25 @@ public class CloneSubgraphPluginTest
         server = ServerHelper.createServer();
         functionalTestHelper = new FunctionalTestHelper( server );
     }
+    
+    @AfterClass
+    public static void shutdownServer()
+    {
+        try
+        {
+            if ( server != null ) server.stop();
+        }
+        finally
+        {
+            server = null;
+        }
+    }
 
     @Before
     public void setupTheDatabase()
     {
         ServerHelper.cleanTheDatabase( server );
         createASocialNetwork( server.getDatabase().graph );
-    }
-
-    @AfterClass
-    public static void stopServer()
-    {
-        server.stop();
     }
 
     private Node jw;

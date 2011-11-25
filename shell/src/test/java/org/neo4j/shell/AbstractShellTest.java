@@ -24,15 +24,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.neo4j.graphdb.DynamicRelationshipType.withName;
 import static org.neo4j.helpers.collection.IteratorUtil.asCollection;
-import static org.neo4j.kernel.impl.util.FileUtils.deleteRecursively;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.Serializable;
-import java.rmi.RemoteException;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
 import java.util.regex.Pattern;
 
 import org.junit.After;
@@ -40,66 +32,65 @@ import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Ignore;
-import org.neo4j.graphdb.Direction;
-import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.NotFoundException;
 import org.neo4j.graphdb.Relationship;
 import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
-import org.neo4j.kernel.EmbeddedGraphDatabase;
-import org.neo4j.shell.impl.RemoteOutput;
+import org.neo4j.shell.impl.CollectingOutput;
 import org.neo4j.shell.impl.SameJvmClient;
 import org.neo4j.shell.kernel.GraphDatabaseShellServer;
+import org.neo4j.test.ImpermanentGraphDatabase;
 
 @Ignore
 public abstract class AbstractShellTest
 {
-    private static final String DB_PATH = "target/var/shelldb";
-    protected static GraphDatabaseService db;
+    protected static ImpermanentGraphDatabase db;
     private static ShellServer shellServer;
     private ShellClient shellClient;
     protected static final RelationshipType RELATIONSHIP_TYPE = withName( "TYPE" );
     
+    private Transaction tx;
+    
     @BeforeClass
     public static void startUp() throws Exception
     {
-        deleteRecursively( new File( DB_PATH ) );
-        db = new EmbeddedGraphDatabase( DB_PATH );
+        db = new ImpermanentGraphDatabase();
         shellServer = new GraphDatabaseShellServer( db );
     }
     
     @Before
     public void doBefore()
     {
-        clearDb();
+        db.cleanContent( true );
         shellClient = new SameJvmClient( shellServer );
     }
     
-    private void clearDb()
-    {
-        Transaction tx = db.beginTx();
-        for ( Node node : db.getAllNodes() )
-        {
-            for ( Relationship rel : node.getRelationships( Direction.OUTGOING ) )
-            {
-                rel.delete();
-            }
-            if ( !node.equals( db.getReferenceNode() ) )
-            {
-                node.delete();
-            }
-        }
-        tx.success();
-        tx.finish();
-    }
-
     @After
     public void doAfter()
     {
+        if ( tx != null ) finishTx();
         shellClient.shutdown();
     }
     
+    protected void beginTx()
+    {
+        assert tx == null;
+        tx = db.beginTx();
+    }
+    
+    protected void finishTx()
+    {
+        finishTx( true );
+    }
+
+    protected void finishTx( boolean success )
+    {
+        assert tx != null;
+        if ( success ) tx.success();
+        tx.finish();
+    }
+
     @AfterClass
     public static void shutDown() throws Exception
     {
@@ -133,7 +124,7 @@ public abstract class AbstractShellTest
     public void executeCommand( ShellServer server, ShellClient client, String command,
             String... theseLinesMustExistRegEx ) throws Exception
     {
-        OutputCollector output = new OutputCollector();
+        CollectingOutput output = new CollectingOutput();
         server.interpretLine( command, client.session(), output );
         
         for ( String lineThatMustExist : theseLinesMustExistRegEx )
@@ -157,7 +148,7 @@ public abstract class AbstractShellTest
 
     public void executeCommandExpectingException( String command, String errorMessageShouldContain ) throws Exception
     {
-        OutputCollector output = new OutputCollector();
+        CollectingOutput output = new CollectingOutput();
         try
         {
             shellServer.interpretLine( command, shellClient.session(), output );
@@ -282,60 +273,5 @@ public abstract class AbstractShellTest
         node.setProperty( key, value );
         tx.success();
         tx.finish();
-    }
-
-    public class OutputCollector implements Output, Serializable, Iterable<String>
-    {
-        private static final long serialVersionUID = 1L;
-        private final List<String> lines = new ArrayList<String>();
-        private String ongoingLine = "";
-
-        @Override
-        public Appendable append( CharSequence csq, int start, int end )
-                throws IOException
-        {
-            this.print( RemoteOutput.asString( csq ).substring( start, end ) );
-            return this;
-        }
-
-        @Override
-        public Appendable append( char c ) throws IOException
-        {
-            this.print( c );
-            return this;
-        }
-
-        @Override
-        public Appendable append( CharSequence csq ) throws IOException
-        {
-            this.print( RemoteOutput.asString( csq ) );
-            return this;
-        }
-
-        @Override
-        public void println( Serializable object ) throws RemoteException
-        {
-            print( object );
-            println();
-        }
-
-        @Override
-        public void println() throws RemoteException
-        {
-            lines.add( ongoingLine );
-            ongoingLine = "";
-        }
-
-        @Override
-        public void print( Serializable object ) throws RemoteException
-        {
-            ongoingLine += object.toString();
-        }
-
-        @Override
-        public Iterator<String> iterator()
-        {
-            return lines.iterator();
-        }
     }
 }

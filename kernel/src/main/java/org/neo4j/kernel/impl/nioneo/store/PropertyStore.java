@@ -35,17 +35,18 @@ import java.util.logging.Level;
 import org.neo4j.helpers.UTF8;
 import org.neo4j.kernel.IdGeneratorFactory;
 import org.neo4j.kernel.IdType;
+import org.neo4j.kernel.impl.util.StringLogger;
 
 /**
  * Implementation of the property store. This implementation has two dynamic
  * stores. One used to store keys and another for string property values.
  */
-public class PropertyStore extends AbstractStore implements Store
+public class PropertyStore extends AbstractStore implements Store, RecordStore<PropertyRecord>
 {
     public static final int DEFAULT_DATA_BLOCK_SIZE = 120;
     public static final int DEFAULT_PAYLOAD_SIZE = 32;
 
-    private static final String TYPE_DESCRIPTOR = "PropertyStore";
+    public static final String TYPE_DESCRIPTOR = "PropertyStore";
 
     public static final int RECORD_SIZE = 1/*next and prev high bits*/
     + 4/*next*/
@@ -60,6 +61,22 @@ public class PropertyStore extends AbstractStore implements Store
     public PropertyStore( String fileName, Map<?,?> config )
     {
         super( fileName, config, IdType.PROPERTY );
+    }
+
+    @Override
+    public void accept( RecordStore.Processor processor, PropertyRecord record )
+    {
+        processor.processProperty( this, record );
+    }
+
+    DynamicStringStore getStringStore()
+    {
+        return stringPropertyStore;
+    }
+
+    DynamicArrayStore getArrayStore()
+    {
+        return arrayPropertyStore;
     }
 
     @Override
@@ -132,6 +149,12 @@ public class PropertyStore extends AbstractStore implements Store
         return RECORD_SIZE;
     }
 
+    @Override
+    public int getRecordHeaderSize()
+    {
+        return RECORD_SIZE - DEFAULT_PAYLOAD_SIZE;
+    }
+
     /**
      * Creates a new property store contained in <CODE>fileName</CODE> If
      * filename is <CODE>null</CODE> or the file already exists an
@@ -146,8 +169,10 @@ public class PropertyStore extends AbstractStore implements Store
     {
         IdGeneratorFactory idGeneratorFactory = (IdGeneratorFactory) config.get(
                 IdGeneratorFactory.class );
+        FileSystemAbstraction fileSystem = (FileSystemAbstraction) config.get( FileSystemAbstraction.class );
 
-        createEmptyStore( fileName, buildTypeDescriptorAndVersion( TYPE_DESCRIPTOR ), idGeneratorFactory );
+        createEmptyStore( fileName, buildTypeDescriptorAndVersion( TYPE_DESCRIPTOR ), idGeneratorFactory,
+                fileSystem );
         int stringStoreBlockSize = DEFAULT_DATA_BLOCK_SIZE;
         int arrayStoreBlockSize = DEFAULT_DATA_BLOCK_SIZE;
         try
@@ -177,10 +202,10 @@ public class PropertyStore extends AbstractStore implements Store
         }
 
         DynamicStringStore.createStore( fileName + ".strings",
-            stringStoreBlockSize, idGeneratorFactory, IdType.STRING_BLOCK );
-        PropertyIndexStore.createStore( fileName + ".index", idGeneratorFactory );
+            stringStoreBlockSize, idGeneratorFactory, fileSystem, IdType.STRING_BLOCK );
+        PropertyIndexStore.createStore( fileName + ".index", idGeneratorFactory, fileSystem );
         DynamicArrayStore.createStore( fileName + ".arrays",
-                arrayStoreBlockSize, idGeneratorFactory );
+                arrayStoreBlockSize, idGeneratorFactory, fileSystem );
     }
 
     private long nextStringBlockId()
@@ -235,6 +260,12 @@ public class PropertyStore extends AbstractStore implements Store
         {
             releaseWindow( window );
         }
+    }
+
+    @Override
+    public void forceUpdateRecord( PropertyRecord record )
+    {
+        updateRecord( record ); // TODO: should we do something special for property records?
     }
 
     private void updateRecord( PropertyRecord record, PersistenceWindow window )
@@ -325,7 +356,7 @@ public class PropertyStore extends AbstractStore implements Store
         PersistenceWindow window = acquireWindow( id, OperationType.READ );
         try
         {
-            PropertyRecord record = getRecord( id, window );
+            PropertyRecord record = getRecord( id, window, RecordLoad.NORMAL );
             return record;
         }
         finally
@@ -334,6 +365,11 @@ public class PropertyStore extends AbstractStore implements Store
         }
     }
 
+    /*
+     * This will add the value records without checking if they are already
+     * in the block - so make sure to call this after checking isHeavy() or
+     * you will end up with duplicates.
+     */
     public void makeHeavy( PropertyBlock record )
     {
         if ( record.getType() == PropertyType.STRING )
@@ -362,7 +398,7 @@ public class PropertyStore extends AbstractStore implements Store
         PersistenceWindow window = acquireWindow( id, OperationType.READ );
         try
         {
-            record = getRecord( id, window );
+            record = getRecord( id, window, RecordLoad.NORMAL );
         }
         finally
         {
@@ -391,6 +427,29 @@ public class PropertyStore extends AbstractStore implements Store
             }
         }
         return record;
+    }
+
+    @Override
+    public PropertyRecord forceGetRecord( long id )
+    {
+        PersistenceWindow window = null;
+        try
+        {
+            window = acquireWindow( id, OperationType.READ );
+        }
+        catch ( InvalidRecordException e )
+        {
+            return new PropertyRecord( id );
+        }
+        
+        try
+        {
+            return getRecord( id, window, RecordLoad.FORCE );
+        }
+        finally
+        {
+            releaseWindow( window );
+        }
     }
 
     private PropertyRecord getRecordFromBuffer( long id, Buffer buffer )
@@ -426,11 +485,11 @@ public class PropertyStore extends AbstractStore implements Store
         return record;
     }
 
-    private PropertyRecord getRecord( long id, PersistenceWindow window )
+    private PropertyRecord getRecord( long id, PersistenceWindow window, RecordLoad load )
     {
         Buffer buffer = window.getOffsettedBuffer( id );
         PropertyRecord toReturn = getRecordFromBuffer( id, buffer );
-        if ( !toReturn.inUse() )
+        if ( !toReturn.inUse() && load != RecordLoad.FORCE )
         {
             throw new InvalidRecordException( "Record[" + id + "] not in use" );
         }
@@ -547,7 +606,7 @@ public class PropertyStore extends AbstractStore implements Store
         else if ( value instanceof Short ) setSingleBlockValue( block, keyId, PropertyType.SHORT, ((Short)value).longValue() );
         else if ( value.getClass().isArray() )
         {   // Try short array first, i.e. inlined in the property block
-            if ( ShortArray.encode( keyId, value, block, DEFAULT_PAYLOAD_SIZE ) ) return;
+            if ( ShortArray.encode( keyId, value, block, PropertyType.getPayloadSize() ) ) return;
 
             // Fall back to dynamic array store
             long arrayBlockId = nextArrayBlockId();
@@ -681,5 +740,29 @@ public class PropertyStore extends AbstractStore implements Store
         // TODO: The next line is an ugly hack, but works.
         Buffer fromByteBuffer = new Buffer( null, buffer );
         return getRecordFromBuffer( 0, fromByteBuffer ).inUse();
+    }
+
+    @Override
+    public void logVersions( StringLogger msgLog )
+    {
+        super.logVersions( msgLog );
+        propertyIndexStore.logVersions( msgLog );
+        stringPropertyStore.logVersions( msgLog );
+        arrayPropertyStore.logVersions( msgLog );
+    }
+
+    @Override
+    public void logIdUsage( StringLogger logger )
+    {
+        NeoStore.logIdUsage( logger, this );
+        propertyIndexStore.logIdUsage( logger );
+        stringPropertyStore.logIdUsage( logger );
+        arrayPropertyStore.logIdUsage( logger );
+    }
+    
+    @Override
+    public String toString()
+    {
+        return super.toString() + "[blocksPerRecord:" + PropertyType.getPayloadSizeLongs() + "]";
     }
 }

@@ -21,6 +21,7 @@ package org.neo4j.server.rest;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.File;
@@ -128,6 +129,18 @@ public class RESTDocsGenerator extends AsciiDocGenerator
     public RESTDocsGenerator expectedStatus( final int expectedResponseStatus )
     {
         this.expectedResponseStatus = expectedResponseStatus;
+        return this;
+    }
+    
+    /**
+     * Set the expected status of the response. The test will fail if the
+     * response has a different status. Defaults to HTTP 200 OK.
+     * 
+     * @param expectedResponseStatus the expected response status
+     */
+    public RESTDocsGenerator expectedStatus( final ClientResponse.Status expectedStatus)
+    {
+        this.expectedResponseStatus = expectedStatus.getStatusCode();
         return this;
     }
 
@@ -315,7 +328,7 @@ public class RESTDocsGenerator extends AsciiDocGenerator
         }
         if ( response.getType() != null )
         {
-            assertEquals( "wrong response type: "+ data.entity, type, response.getType() );
+            assertTrue( "wrong response type: "+ data.entity, response.getType().isCompatible( type ) );
         }
         for ( String headerField : headerFields )
         {

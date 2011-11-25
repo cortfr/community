@@ -27,6 +27,7 @@ import scala.collection.JavaConverters._
 import org.junit.matchers.JUnitMatchers._
 import org.neo4j.graphdb.{Path, Relationship, Direction, Node}
 import org.junit.{Ignore, Test}
+import org.neo4j.index.lucene.ValueContext
 
 class ExecutionEngineTest extends ExecutionEngineHelper {
 
@@ -52,26 +53,32 @@ class ExecutionEngineTest extends ExecutionEngineHelper {
   }
 
   @Test def shouldFilterOnGreaterThan() {
-    val query = Query.
-      start(NodeById("node", 0)).
-      where(LessThan(Literal(0), Literal(1))).
-      returns(ValueReturnItem(EntityValue("node")))
+    val result = parseAndExecute("start node=node(0) where 0<1 return node")
 
-
-    val result = execute(query)
     assertEquals(List(refNode), result.columnAs[Node]("node").toList)
   }
 
   @Test def shouldFilterOnRegexp() {
     val n1 = createNode(Map("name" -> "Andres"))
     val n2 = createNode(Map("name" -> "Jim"))
+
     val query = Query.
       start(NodeById("node", n1.getId, n2.getId)).
-      where(RegularExpression(PropertyValue("node", "name"), "And.*")).
+      where(RegularExpression(PropertyValue("node", "name"), Literal("And.*"))).
       returns(ValueReturnItem(EntityValue("node")))
 
     val result = execute(query)
     assertEquals(List(n1), result.columnAs[Node]("node").toList)
+  }
+
+  @Test def shouldBeAbleToUseParamsInPatternMatchingPredicates() {
+    val n1 = createNode()
+    val n2 = createNode()
+    relate(n1, n2, "A", Map("foo" -> "bar"))
+
+    val result = parseAndExecute("start a=node(1) match a-[r]->b where r.foo =~ {param} return b", "param" -> "bar")
+
+    assertEquals(List(n2), result.columnAs[Node]("b").toList)
   }
 
   @Test def shouldGetOtherNode() {
@@ -456,6 +463,24 @@ class ExecutionEngineTest extends ExecutionEngineHelper {
     assertEquals(List(Map("a" -> a, "b" -> b), Map("a" -> b, "b" -> a)), result.toList)
   }
 
+  @Test def shouldAcceptSkipZero() {
+    val result = parseAndExecute("start n=node(0) where 1 = 0 return n skip 0")
+
+    assertEquals(List(), result.columnAs[Node]("n").toList)
+  }
+
+  @Test def shouldReturnTwoSubgraphsWithBoundUndirectedRelationshipAndOptionalRelationship() {
+    val a = createNode("a")
+    val b = createNode("b")
+    val c = createNode("c")
+    relate(a, b, "rel", "r")
+    relate(b, c, "rel", "r2")
+
+    val result = parseAndExecute("start r=rel(0) match a-[r]-b-[?]-c return a,b,c")
+
+    assertEquals(List(Map("a" -> a, "b" -> b, "c" -> c), Map("a" -> b, "b" -> a, "c" -> null)), result.toList)
+  }
+
   @Test def shouldLimitToTwoHits() {
     createNodes("A", "B", "C", "D", "E")
 
@@ -483,6 +508,20 @@ class ExecutionEngineTest extends ExecutionEngineHelper {
     assertEquals(nodes.drop(2).toList, result.columnAs[Node]("start").toList)
   }
 
+  @Test def shouldStartTheResultFromSecondRowByParam() {
+    val nodes = createNodes("A", "B", "C", "D", "E")
+
+    val query = Query.
+      start(NodeById("start", nodeIds: _*)).
+      orderBy(SortItem(ValueReturnItem(PropertyValue("start", "name")), true)).
+      skip("skippa").
+      returns(ValueReturnItem(EntityValue("start")))
+
+    val result = execute(query, "skippa" -> 2)
+
+    assertEquals(nodes.drop(2).toList, result.columnAs[Node]("start").toList)
+  }
+
   @Test def shouldGetStuffInTheMiddle() {
     val nodes = createNodes("A", "B", "C", "D", "E")
 
@@ -494,6 +533,21 @@ class ExecutionEngineTest extends ExecutionEngineHelper {
       returns(ValueReturnItem(EntityValue("start")))
 
     val result = execute(query)
+
+    assertEquals(nodes.slice(2, 4).toList, result.columnAs[Node]("start").toList)
+  }
+
+  @Test def shouldGetStuffInTheMiddleByParam() {
+    val nodes = createNodes("A", "B", "C", "D", "E")
+
+    val query = Query.
+      start(NodeById("start", nodeIds: _*)).
+      orderBy(SortItem(ValueReturnItem(PropertyValue("start", "name")), true)).
+      limit("l").
+      skip("s").
+      returns(ValueReturnItem(EntityValue("start")))
+
+    val result = execute(query, "l" -> 2, "s" -> 2)
 
     assertEquals(nodes.slice(2, 4).toList, result.columnAs[Node]("start").toList)
   }
@@ -759,6 +813,52 @@ class ExecutionEngineTest extends ExecutionEngineHelper {
     ), result.columnAs[Path]("p").toList)
   }
 
+  @Test def aVarLengthPathOfLengthZero() {
+    createNodes("A", "B", "C")
+    relate("A" -> "KNOWS" -> "B")
+    relate("B" -> "KNOWS" -> "C")
+
+    val result = parseAndExecute("start a=node(1) match a-[*0..1]->b return a,b")
+
+    assertEquals(
+      Set(
+        Map("a" -> node("A"), "b" -> node("B")),
+        Map("a" -> node("A"), "b" -> node("A"))),
+      result.toSet)
+  }
+
+  @Test def aNamedVarLengthPathOfLengthZero() {
+    createNodes("A", "B", "C")
+    val r1 = relate("A" -> "KNOWS" -> "B")
+    val r2 = relate("B" -> "FRIEND" -> "C")
+
+    val result = parseAndExecute("start a=node(1) match p=a-[:KNOWS*0..1]->b-[:FRIEND*0..1]->c return p,a,b,c")
+
+    assertEquals(
+      Set(
+        PathImpl(node("A")),
+        PathImpl(node("A"), r1, node("B")),
+        PathImpl(node("A"), r1, node("B"), r2, node("C"))
+      ),
+      result.columnAs[Path]("p").toSet)
+  }
+
+  @Test def testZeroLengthVarLenPathInTheMiddle() {
+    createNodes("A", "B", "C", "D", "E")
+    relate("A" -> "CONTAINS" -> "B")
+    relate("B" -> "FRIEND" -> "C")
+
+
+    val result = parseAndExecute("start a=node(1) match a-[:CONTAINS*0..1]->b-[:FRIEND*0..1]->c return a,b,c")
+
+    assertEquals(
+      Set(
+        Map("a" -> node("A"), "b" -> node("A"), "c" -> node("A")),
+        Map("a" -> node("A"), "b" -> node("B"), "c" -> node("B")),
+        Map("a" -> node("A"), "b" -> node("B"), "c" -> node("C"))),
+      result.toSet)
+  }
+
   @Test def shouldReturnAVarLengthPathWithoutMinimalLength() {
     createNodes("A", "B", "C")
     val r1 = relate("A" -> "KNOWS" -> "B")
@@ -834,22 +934,22 @@ class ExecutionEngineTest extends ExecutionEngineHelper {
       NodeById("pA", ParameterValue("a")),
       NodeById("pB", ParameterValue("b")),
       NodeById("pC", ParameterValue("c")),
-      NodeById("pD", ParameterValue("d")),
-      NodeById("pE", ParameterValue("e"))).
+      NodeById("pD", ParameterValue("0")),
+      NodeById("pE", ParameterValue("1"))).
       returns(ValueReturnItem(EntityValue("pA")), ValueReturnItem(EntityValue("pB")), ValueReturnItem(EntityValue("pC")), ValueReturnItem(EntityValue("pD")), ValueReturnItem(EntityValue("pE")))
 
     val result = execute(query,
       "a" -> Seq[Long](1),
       "b" -> 2,
       "c" -> Seq(3L).asJava,
-      "d" -> Seq(4).asJava,
-      "e" -> List(5)
+      "0" -> Seq(4).asJava,
+      "1" -> List(5)
     )
 
     assertEquals(1, result.toList.size)
   }
 
-  @Test(expected = classOf[ParameterNotFoundException]) def parameterTypeErrorShouldBeNicelyExplained() {
+  @Test(expected = classOf[ParameterWrongTypeException]) def parameterTypeErrorShouldBeNicelyExplained() {
     createNodes("A")
 
     val query = Query.
@@ -890,12 +990,285 @@ class ExecutionEngineTest extends ExecutionEngineHelper {
     assert(List(Map("TYPE(r)" -> "KNOW")) === result.toList)
   }
 
+  @Test def twoBoundNodesPointingToOne() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val x1 = createNode("x1")
+    val x2 = createNode("x2")
+
+    relate(a, x1, "REL", "AX1")
+    relate(a, x2, "REL", "AX2")
+
+    relate(b, x1, "REL", "BX1")
+    relate(b, x2, "REL", "BX2")
+
+    val result = parseAndExecute("""
+start a  = node({A}), b = node({B})
+match a-[rA]->x<-[rB]->b
+return x""", "A" -> 1, "B" -> 2)
+
+    assert(List(x1, x2) === result.columnAs[Node]("x").toList)
+  }
+
+
+  @Test def threeBoundNodesPointingToOne() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val c = createNode("C")
+    val x1 = createNode("x1")
+    val x2 = createNode("x2")
+
+    relate(a, x1, "REL", "AX1")
+    relate(a, x2, "REL", "AX2")
+
+    relate(b, x1, "REL", "BX1")
+    relate(b, x2, "REL", "BX2")
+
+    relate(c, x1, "REL", "CX1")
+    relate(c, x2, "REL", "CX2")
+
+    val result = parseAndExecute("""
+start a  = node({A}), b = node({B}), c = node({C})
+match a-[rA]->x, b-[rB]->x, c-[rC]->x
+return x""", "A" -> 1, "B" -> 2, "C" -> 3)
+
+    assert(List(x1, x2) === result.columnAs[Node]("x").toList)
+  }
+
+  @Test def threeBoundNodesPointingToOneWithABunchOfExtraConnections() {
+    val a = createNode("a")
+    val b = createNode("b")
+    val c = createNode("c")
+    val d = createNode("d")
+    val e = createNode("e")
+    val f = createNode("f")
+    val g = createNode("g")
+    val h = createNode("h")
+    val i = createNode("i")
+    val j = createNode("j")
+    val k = createNode("k")
+
+    relate(a, d)
+    relate(a, e)
+    relate(a, f)
+    relate(a, g)
+    relate(a, i)
+
+    relate(b, d)
+    relate(b, e)
+    relate(b, f)
+    relate(b, h)
+    relate(b, k)
+
+    relate(c, d)
+    relate(c, e)
+    relate(c, h)
+    relate(c, g)
+    relate(c, j)
+
+    val result = parseAndExecute("""
+start a  = node({A}), b = node({B}), c = node({C})
+match a-->x, b-->x, c-->x
+return x""", "A" -> 1, "B" -> 2, "C" -> 3)
+
+    assert(List(d, e) === result.columnAs[Node]("x").toList)
+  }
+
+  @Test def shouldHandleCollaborativeFiltering() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val c = createNode("C")
+    val d = createNode("D")
+    val e = createNode("E")
+    val f = createNode("F")
+
+    relate(a, b, "knows", "rAB")
+    relate(a, c, "knows", "rAC")
+    relate(a, f, "knows", "rAF")
+
+    relate(b, c, "knows", "rBC")
+    relate(b, d, "knows", "rBD")
+    relate(b, e, "knows", "rBE")
+
+    relate(c, e, "knows", "rCE")
+
+    val result = parseAndExecute("""
+start a  = node(1)
+match a-[r1:knows]->friend-[r2:knows]->foaf, a-[foafR?:knows]->foaf
+where foafR is null
+return foaf, count(*)
+order by count(*)""")
+
+    assert(List(Map("foaf" -> d, "count(*)" -> 1), Map("foaf" -> e, "count(*)" -> 2)) === result.toList)
+  }
+
+  @Test def shouldSplitOptionalMandatoryCleverly() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val c = createNode("C")
+
+    relate(a, b, "knows", "rAB")
+    relate(b, c, "knows", "rBC")
+
+    val result = parseAndExecute("""
+start a  = node(1)
+match a-[r1?:knows]->friend-[r2:knows]->foaf
+return foaf""")
+
+    assert(List(Map("foaf" -> c)) === result.toList)
+  }
+
   @Test(expected = classOf[ParameterNotFoundException]) def shouldComplainWhenMissingParams() {
     val query = Query.
       start(NodeById("pA", ParameterValue("a"))).
       returns(ValueReturnItem(EntityValue("pA")))
 
     execute(query).toList
+  }
+
+  @Test def shouldSupportSortAndDistinct() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val c = createNode("C")
+
+    val result = parseAndExecute("""
+start a  = node(1,2,3,1)
+return distinct a
+order by a.name
+""")
+
+    assert(List(a, b, c) === result.columnAs[Node]("a").toList)
+  }
+
+  @Test def shouldHandleAggregationOnFunctions() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val c = createNode("C")
+    relate(a, b, "X")
+    relate(a, c, "X")
+
+    val result = parseAndExecute("""
+start a  = node(1)
+match p = a -[*]-> b
+return b, avg(length(p))
+""")
+
+    assert(List(b, c) === result.columnAs[Node]("b").toList)
+  }
+
+  @Test def shouldHandleOptionalPaths() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val c = createNode("C")
+    val r = relate(a, b, "X")
+
+    val result = parseAndExecute("""
+start a  = node(1), x = node(2,3)
+match p = a -[?]-> x
+return x, p
+""")
+
+    assert(List(
+      Map("x" -> b, "p" -> PathImpl(a, r, b)),
+      Map("x" -> c, "p" -> null)
+    ) === result.toList)
+  }
+
+  @Test def shouldHandleOptionalPathsFromGraphAlgo() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val c = createNode("C")
+    val r = relate(a, b, "X")
+
+    val result = parseAndExecute("""
+start a  = node(1), x = node(2,3)
+match p = shortestPath(a -[?*]-> x)
+return x, p
+""")
+
+    assert(List(
+      Map("x" -> b, "p" -> PathImpl(a, r, b)),
+      Map("x" -> c, "p" -> null)
+    ) === result.toList)
+  }
+
+  @Test def shouldHandleOptionalPathsFromACombo() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val r = relate(a, b, "X")
+
+    val result = parseAndExecute("""
+start a  = node(1)
+match p = a-->b-[?*]->c
+return p
+""")
+
+    assert(List(
+      Map("p" -> null)
+    ) === result.toList)
+  }
+
+  @Test def shouldHandleOptionalPathsFromVarLengthPath() {
+    val a = createNode("A")
+    val b = createNode("B")
+    val c = createNode("C")
+    val r = relate(a, b, "X")
+
+    val result = parseAndExecute("""
+start a  = node(1), x = node(2,3)
+match p = a -[?*]-> x
+return x, p
+""")
+
+    assert(List(
+      Map("x" -> b, "p" -> PathImpl(a, r, b)),
+      Map("x" -> c, "p" -> null)
+    ) === result.toList)
+  }
+
+  @Test def shouldSupportMultipleRegexes() {
+    val a = createNode(Map("name" -> "Andreas"))
+
+
+    val result = parseAndExecute("""
+start a  = node(1)
+where a.name =~ /And.*/ AND a.name =~ /And.*/
+return a
+""")
+
+    assert(List(a) === result.columnAs[Node]("a").toList)
+  }
+
+  @Ignore("Should be supported, but doesn't work")
+  @Test def shouldBeAbleToQueryNumericIndexes() {
+    val a = createNode("x" -> 5)
+
+    inTx(() => {
+      val idx = graph.index().forNodes("numericIndex")
+      idx.add(a, "number", ValueContext.numeric(13))
+    })
+
+
+    val result = parseAndExecute("""
+start a  = node:numericIndex(number = 13)
+return a
+""")
+
+    assert(List(a) === result.columnAs[Node]("a").toList)
+  }
+
+  @Test(expected = classOf[SyntaxException]) def shouldNotSupportSortingOnThingsAfterDistinctHasRemovedIt() {
+    val a = createNode("name" -> "A", "age" -> 13)
+    val b = createNode("name" -> "B", "age" -> 12)
+    val c = createNode("name" -> "C", "age" -> 11)
+
+    val result = parseAndExecute("""
+start a  = node(1,2,3,1)
+return distinct a.name
+order by a.age
+""")
+
+    assert(List(a, b, c) === result.columnAs[Node]("a").toList)
   }
 
   @Test def shouldThrowNiceErrorMessageWhenPropertyIsMissing() {
@@ -905,11 +1278,6 @@ class ExecutionEngineTest extends ExecutionEngineHelper {
     } catch {
       case x: SyntaxException => assertEquals("n.A_PROPERTY_THAT_IS_MISSING does not exist on Node[0]", x.getMessage)
     }
-  }
-
-  private def parseAndExecute(q: String, params: (String, Any)*): ExecutionResult = {
-    val query = new CypherParser().parse(q)
-    execute(query, params: _*)
   }
 }
 

@@ -29,6 +29,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.neo4j.helpers.collection.MapUtil.stringMap;
 import static org.neo4j.index.Neo4jTestCase.assertContains;
 import static org.neo4j.index.Neo4jTestCase.assertContainsInOrder;
 import static org.neo4j.index.impl.lucene.Contains.contains;
@@ -36,7 +37,6 @@ import static org.neo4j.index.impl.lucene.IsEmpty.isEmpty;
 import static org.neo4j.index.lucene.QueryContext.numericRange;
 import static org.neo4j.index.lucene.ValueContext.numeric;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -48,6 +48,7 @@ import org.apache.lucene.search.DefaultSimilarity;
 import org.apache.lucene.search.NumericRangeQuery;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.TermQuery;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.neo4j.graphdb.DynamicRelationshipType;
 import org.neo4j.graphdb.Node;
@@ -60,10 +61,10 @@ import org.neo4j.graphdb.index.IndexManager;
 import org.neo4j.graphdb.index.RelationshipIndex;
 import org.neo4j.helpers.collection.IteratorUtil;
 import org.neo4j.helpers.collection.MapUtil;
-import org.neo4j.index.Neo4jTestCase;
 import org.neo4j.index.lucene.QueryContext;
 import org.neo4j.index.lucene.ValueContext;
-import org.neo4j.kernel.EmbeddedGraphDatabase;
+import org.neo4j.kernel.AbstractGraphDatabase;
+import org.neo4j.test.ImpermanentGraphDatabase;
 
 public class TestLuceneIndex extends AbstractLuceneIndexTest
 {
@@ -117,12 +118,10 @@ public class TestLuceneIndex extends AbstractLuceneIndexTest
         assertTrue( index.isWriteable() );
     }
 
+    @Ignore
     @Test
     public void testStartupInExistingDirectory() {
-		File dir = new File("target" + File.separator + "temp" + File.separator);
-        Neo4jTestCase.deleteFileOrDirectory( dir );
-        dir.mkdir();
-        EmbeddedGraphDatabase graphDatabase = new EmbeddedGraphDatabase( dir.getAbsolutePath() );
+        AbstractGraphDatabase graphDatabase = new ImpermanentGraphDatabase();
         Index<Node> index = graphDatabase.index().forNodes("nodes");
         assertNotNull(index);
     }
@@ -1336,5 +1335,44 @@ public class TestLuceneIndex extends AbstractLuceneIndexTest
         index.remove( node );
         assertNull( index.query( "key", "v*" ).getSingle() );
         assertNull( index.query( "key", "*" ).getSingle() );
+    }
+
+    @Ignore( "TODO Exposes a bug" )
+    @Test
+    public void updateIndex() throws Exception {
+        String TEXT = "text";
+        String NUMERIC = "numeric";
+        String TEXT_1 = "text_1";
+        
+        Index<Node> index = nodeIndex( "update-index", LuceneIndexImplementation.EXACT_CONFIG );
+        Node n = graphDb.createNode();
+        index.add(n, NUMERIC, new ValueContext(5).indexNumeric());
+        index.add(n, TEXT, "text");
+        index.add(n, TEXT_1, "text");
+        commitTx();
+        assertNotNull( index.query(QueryContext.numericRange(NUMERIC, 5, 5, true, true)).getSingle() );
+        assertNotNull( index.get(TEXT_1, "text").getSingle() );
+
+        beginTx();
+        // Following line may be commented, it's addition of node that causes the problem
+        index.remove(n, TEXT, "text");
+        index.add(n, TEXT, "text 1");
+        commitTx();
+
+        assertNotNull( index.get(TEXT_1, "text").getSingle() );
+
+        // Test fails here
+        assertNotNull( index.query(QueryContext.numericRange(NUMERIC, 5, 5, true, true)).getSingle() );
+    }
+    
+    @Test
+    public void exactIndexWithCaseInsensitive() throws Exception
+    {
+        Index<Node> index = nodeIndex( "exlc", stringMap( "analyzer", LowerCaseKeywordAnalyzer.class.getName() ) );
+        Node node = graphDb.createNode();
+        index.add( node, "name", "Mattias Persson" );
+        assertContains( index.query( "name", "\"maTTias perSson\"" ), node );
+        restartTx();
+        assertContains( index.query( "name", "\"maTTias perSson\"" ), node );
     }
 }

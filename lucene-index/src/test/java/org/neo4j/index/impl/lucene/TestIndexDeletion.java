@@ -19,15 +19,12 @@
  */
 package org.neo4j.index.impl.lucene;
 
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThat;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.neo4j.index.Neo4jTestCase.assertContains;
 import static org.neo4j.index.impl.lucene.Contains.contains;
-import static org.neo4j.index.impl.lucene.HasThrownException.hasThrownException;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,10 +38,7 @@ import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.graphdb.index.Index;
 import org.neo4j.graphdb.index.IndexHits;
-import org.neo4j.helpers.collection.MapUtil;
-import org.neo4j.index.Neo4jTestCase;
-import org.neo4j.kernel.AbstractGraphDatabase;
-import org.neo4j.kernel.EmbeddedGraphDatabase;
+import org.neo4j.test.ImpermanentGraphDatabase;
 
 public class TestIndexDeletion
 {
@@ -60,9 +54,7 @@ public class TestIndexDeletion
     @BeforeClass
     public static void setUpStuff()
     {
-        String storeDir = "target/var/freshindex";
-        Neo4jTestCase.deleteFileOrDirectory( new File( storeDir ) );
-        graphDb = new EmbeddedGraphDatabase( storeDir, MapUtil.stringMap( "index", "lucene" ) );
+        graphDb = new ImpermanentGraphDatabase();
     }
 
     @AfterClass
@@ -72,7 +64,7 @@ public class TestIndexDeletion
     }
 
     @After
-    public void commitTx()
+    public void commitTx() throws Exception
     {
         finishTx( true );
         for ( WorkThread worker : workers )
@@ -192,46 +184,39 @@ public class TestIndexDeletion
     }
 
     @Test
-    public void deleteInOneTxShouldNotAffectTheOther() throws InterruptedException
+    public void deleteInOneTxShouldNotAffectTheOther() throws Exception
     {
         index.delete();
 
-        WorkThread firstTx = createWorker();
+        WorkThread firstTx = createWorker( "Single" );
+        firstTx.beginTransaction();
         firstTx.createNodeAndIndexBy( key, "another value" );
         firstTx.commit();
     }
 
 	@Test
-	public void deleteAndCommitShouldBePublishedToOtherTransaction2()
-			throws InterruptedException {
-		WorkThread firstTx = createWorker();
-		WorkThread secondTx = createWorker();
+	public void deleteAndCommitShouldBePublishedToOtherTransaction2() throws Exception
+	{
+		WorkThread firstTx = createWorker( "First" );
+		WorkThread secondTx = createWorker( "Second" );
 
 		firstTx.beginTransaction();
-		firstTx.waitForCommandToComplete();
-
 		secondTx.beginTransaction();
-		secondTx.waitForCommandToComplete();
 
 		firstTx.createNodeAndIndexBy(key, "some value");
-		firstTx.waitForCommandToComplete();
-
 		secondTx.createNodeAndIndexBy(key, "some other value");
-		secondTx.waitForCommandToComplete();
 
 		firstTx.deleteIndex();
-		firstTx.waitForCommandToComplete();
-
 		firstTx.commit();
-		firstTx.waitForCommandToComplete();
 
-		secondTx.queryIndex(key, "some other value");
-		secondTx.waitForCommandToComplete();
-
-		assertThat(secondTx, hasThrownException());
+		try
+        {
+            secondTx.queryIndex(key, "some other value");
+            fail( "Should throw exception" );
+        }
+        catch ( Exception e ) { /* Good */ }
 
 		secondTx.rollback();
-		secondTx.waitForCommandToComplete();
 
 		// Since $Before will start a tx, add a value and keep tx open and
 		// workers will delete the index so this test will fail in @After
@@ -240,63 +225,24 @@ public class TestIndexDeletion
 	}
 
     @Test
-    public void indexDeletesShouldNotByVisibleUntilCommit()
+    public void indexDeletesShouldNotByVisibleUntilCommit() throws Exception
     {
         commitTx();
 
-        WorkThread firstTx = createWorker();
-        WorkThread secondTx = createWorker();
+        WorkThread firstTx = createWorker( "First" );
+        WorkThread secondTx = createWorker( "Second" );
 
         firstTx.beginTransaction();
-        firstTx.waitForCommandToComplete();
         firstTx.removeFromIndex( key, value );
-        firstTx.waitForCommandToComplete();
 
         IndexHits<Node> indexHits = secondTx.queryIndex( key, value );
-        secondTx.waitForCommandToComplete();
         assertThat( indexHits, contains( node ) );
 
         firstTx.rollback();
     }
 
     @Test
-    public void indexDeleteShouldDeleteDirectory()
-    {
-        String otherIndexName = "other-index";
-
-        StringBuffer tempPath = new StringBuffer(
-				((AbstractGraphDatabase) graphDb).getStoreDir())
-				.append(File.separator).append("index").append(File.separator)
-				.append("lucene").append(File.separator).append("node")
-				.append(File.separator);
-
-		File pathToLuceneIndex = new File(tempPath.toString() + INDEX_NAME);
-		File pathToOtherLuceneIndex = new File(tempPath.toString() + otherIndexName);
-
-		Index<Node> otherIndex = graphDb.index().forNodes(otherIndexName);
-        Node node = graphDb.createNode();
-        otherIndex.add( node, "someKey", "someValue" );
-        assertFalse( pathToLuceneIndex.exists() );
-        assertFalse( pathToOtherLuceneIndex.exists() );
-        restartTx();
-
-        // Here "index" and "other-index" indexes should exist
-
-        assertTrue( pathToLuceneIndex.exists() );
-        assertTrue( pathToOtherLuceneIndex.exists() );
-        index.delete();
-        assertTrue( pathToLuceneIndex.exists() );
-        assertTrue( pathToOtherLuceneIndex.exists() );
-        restartTx();
-
-        // Here only "other-index" should exist
-
-        assertFalse( pathToLuceneIndex.exists() );
-        assertTrue( pathToOtherLuceneIndex.exists() );
-    }
-    
-    @Test
-    public void canDeleteIndexEvenIfEntitiesAreFoundToBeAbandonedInTheSameTx()
+    public void canDeleteIndexEvenIfEntitiesAreFoundToBeAbandonedInTheSameTx() throws Exception
     {
         // create and index a node
         Index<Node> nodeIndex = graphDb.index().forNodes( "index" );
@@ -316,12 +262,10 @@ public class TestIndexDeletion
         restartTx();
     }
 
-    private WorkThread createWorker()
+    private WorkThread createWorker( String name )
     {
-        WorkThread workThread = new WorkThread( index, graphDb );
+        WorkThread workThread = new WorkThread( index, graphDb, node );
         workers.add( workThread );
-        workThread.start();
-        workThread.waitForWorkerToStart();
         return workThread;
     }
 }

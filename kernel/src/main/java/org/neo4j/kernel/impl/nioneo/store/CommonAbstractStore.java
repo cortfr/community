@@ -19,7 +19,6 @@
  */
 package org.neo4j.kernel.impl.nioneo.store;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -42,6 +41,7 @@ import org.neo4j.kernel.impl.util.StringLogger;
 public abstract class CommonAbstractStore
 {
     public static final String ALL_STORES_VERSION = "v0.A.0";
+    public static final String UNKNOWN_VERSION = "Uknown";
 
     protected static final Logger logger = Logger
         .getLogger( CommonAbstractStore.class.getName() );
@@ -100,7 +100,7 @@ public abstract class CommonAbstractStore
         }
 
         checkStorage();
-        checkVersion();
+        checkVersion(); // Overriden in NeoStore
         loadStorage();
         initStorage();
     }
@@ -110,9 +110,14 @@ public abstract class CommonAbstractStore
         return buildTypeDescriptorAndVersion( getTypeDescriptor() );
     }
 
-    protected static String buildTypeDescriptorAndVersion( String typeDescriptor )
+    public static String buildTypeDescriptorAndVersion( String typeDescriptor )
     {
         return typeDescriptor + " " + ALL_STORES_VERSION;
+    }
+
+    public void logVersions( StringLogger msgLog )
+    {
+        msgLog.logMessage( "  " + getTypeAndVersionDescriptor() );
     }
 
     protected static long longFromIntAndMod( long base, long modifier )
@@ -145,7 +150,7 @@ public abstract class CommonAbstractStore
                 backupSlave = true;
             }
         }
-        if ( !new File( storageFileName ).exists() )
+        if ( !getFileSystem().fileExists( storageFileName ) )
         {
             throw new IllegalStateException( "No such store[" + storageFileName
                 + "]" );
@@ -233,7 +238,7 @@ public abstract class CommonAbstractStore
         {
             if ( !isReadOnly() || isBackupSlave() )
             {
-                openIdGenerator();
+                openIdGenerator( true );
             }
             else
             {
@@ -250,8 +255,7 @@ public abstract class CommonAbstractStore
             {
                 if ( getConfig() != null )
                 {
-                    String storeDir = (String) getConfig().get( "store_dir" );
-                    StringLogger msgLog = StringLogger.getLogger( storeDir );
+                    StringLogger msgLog = (StringLogger)getConfig().get( StringLogger.class );
                     msgLog.logMessage( getStorageFileName() + " non clean shutdown detected", true );
                 }
             }
@@ -500,6 +504,7 @@ public abstract class CommonAbstractStore
             }
             rebuildIdGenerator();
             storeOk = true;
+            causeOfStoreNotOk = null;
         }
     }
 
@@ -546,9 +551,9 @@ public abstract class CommonAbstractStore
     {
         if ( !isInRecoveryMode() && ( position > getHighId() || !storeOk) )
         {
-            throw new InvalidRecordException( "Position[" + position
-                + "] requested for operation is high id["
-                + getHighId() + "], store is ok[" + storeOk + "]", causeOfStoreNotOk );
+            throw new InvalidRecordException( "Position[" + position + "]"
+                + " requested for high id[" + getHighId() + "], store is ok[" + storeOk + "]"
+                + " recovery[" + isInRecoveryMode() + "]", causeOfStoreNotOk );
         }
         return windowPool.acquire( position, type );
     }
@@ -600,16 +605,22 @@ public abstract class CommonAbstractStore
     /**
      * Opens the {@link IdGenerator} used by this store.
      */
-    protected void openIdGenerator()
+    protected void openIdGenerator( boolean firstTime )
     {
-        idGenerator = openIdGenerator( storageFileName + ".id",
-            idType.getGrabSize() );
+        idGenerator = openIdGenerator( storageFileName + ".id", idType.getGrabSize(), firstTime );
+        
+        /* MP: 2011-11-23
+         * There may have been some migration done in the startup process, so if there have been some
+         * high id registered during, then update id generators. updateHighId does nothing if
+         * not registerIdFromUpdateRecord have been called.
+         */
+        updateHighId();
     }
 
-    protected IdGenerator openIdGenerator( String fileName, int grabSize )
+    protected IdGenerator openIdGenerator( String fileName, int grabSize, boolean firstTime )
     {
         return idGeneratorFactory.open( fileName, grabSize, getIdType(),
-                figureOutHighestIdInUse() );
+                figureOutHighestIdInUse(), firstTime );
     }
 
     protected abstract long figureOutHighestIdInUse();
@@ -639,7 +650,7 @@ public abstract class CommonAbstractStore
     {
         if ( idGenerator != null )
         {
-            idGenerator.close();
+            idGenerator.close( false );
         }
     }
 
@@ -686,7 +697,7 @@ public abstract class CommonAbstractStore
         {
             recordSize = ((AbstractStore) this).getRecordSize();
         }
-        closeIdGenerator();
+        idGenerator.close( true );
         boolean success = false;
         IOException storedIoe = null;
         // hack for WINBLOWS
@@ -807,5 +818,9 @@ public abstract class CommonAbstractStore
         }
     }
 
-
+    @Override
+    public String toString()
+    {
+        return getClass().getSimpleName();
+    }
 }

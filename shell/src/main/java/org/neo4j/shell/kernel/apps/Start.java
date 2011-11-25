@@ -20,6 +20,7 @@
 package org.neo4j.shell.kernel.apps;
 
 import java.rmi.RemoteException;
+import java.util.Map;
 
 import org.neo4j.cypher.SyntaxException;
 import org.neo4j.cypher.commands.Query;
@@ -27,6 +28,7 @@ import org.neo4j.cypher.javacompat.CypherParser;
 import org.neo4j.cypher.javacompat.ExecutionEngine;
 import org.neo4j.cypher.javacompat.ExecutionResult;
 import org.neo4j.helpers.Service;
+import org.neo4j.helpers.collection.MapUtil;
 import org.neo4j.shell.App;
 import org.neo4j.shell.AppCommandParser;
 import org.neo4j.shell.Output;
@@ -48,31 +50,54 @@ public class Start extends GraphDatabaseApp
     @Override
     public String getDescription()
     {
-        return "Executes a Cypher query. " +
-        	"Usage: start <rest of query>";
+        return "Executes a Cypher query. Usage: start <rest of query>\n" +
+                "Example: START me = node({self}) MATCH me-[:KNOWS]->you RETURN you.name\n" +
+                "where {self} will be replaced with the current location in the graph";
     }
 
     @Override
     protected String exec( AppCommandParser parser, Session session, Output out )
         throws ShellException, RemoteException
     {
-        String query = "start";
-        for ( String argument : parser.arguments() )
+        String query = parser.getLine();
+        
+        if ( endsWithNewLine( query ) || looksToBeComplete( query ) )
         {
-            query += " " + argument;
+            CypherParser qparser = new CypherParser();
+            ExecutionEngine engine = new ExecutionEngine( getServer().getDb() );
+            try
+            {
+                Query cquery = qparser.parse( query );
+                ExecutionResult result = engine.execute( cquery, getParameters( session ) );
+                out.println( result.toString() );
+            }
+            catch ( SyntaxException e )
+            {
+                throw ShellException.wrapCause( e );
+            }
+            return null;
         }
-        CypherParser qparser = new CypherParser();
-        ExecutionEngine engine = new ExecutionEngine( getServer().getDb() );
-        try
+        else
         {
-            Query cquery = qparser.parse( query );
-            ExecutionResult result = engine.execute( cquery );
-            out.println( result.toString() );
+            return "c";
         }
-        catch ( SyntaxException e )
-        {
-            throw ShellException.wrapCause( e );
-        }
-        return null;
+    }
+
+    private Map<String, Object> getParameters( Session session ) throws ShellException
+    {
+        NodeOrRelationship self = getCurrent( session );
+        return MapUtil.map( "self", self.isNode() ? self.asNode() :self.asRelationship() );
+    }
+
+    private boolean looksToBeComplete( String query )
+    {
+        // TODO do for real
+        return query.toLowerCase().contains( "return" );
+//        return false;
+    }
+
+    private boolean endsWithNewLine( String query )
+    {
+        return query.length() > 0 && query.endsWith( "\n" );
     }
 }

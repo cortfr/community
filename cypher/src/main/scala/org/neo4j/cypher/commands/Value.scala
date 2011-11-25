@@ -19,10 +19,10 @@
  */
 package org.neo4j.cypher.commands
 
-import org.neo4j.cypher.pipes.aggregation._
 import scala.collection.JavaConverters._
 import org.neo4j.graphdb._
-import org.neo4j.cypher.{ParameterNotFoundException, SyntaxException, SymbolTable}
+import java.lang.String
+import org.neo4j.cypher._
 
 abstract class Value extends (Map[String, Any] => Any) {
   def identifier: Identifier
@@ -40,6 +40,8 @@ case class Literal(v: Any) extends Value {
   def checkAvailable(symbols: SymbolTable) {}
 
   def dependsOn: Set[String] = Set()
+
+  override def toString() = if (v.isInstanceOf[String]) "\"" + v + "\"" else v.toString
 }
 
 abstract case class FunctionValue(functionName: String, arguments: Value*) extends Value {
@@ -53,44 +55,6 @@ abstract case class FunctionValue(functionName: String, arguments: Value*) exten
   def dependsOn: Set[String] = arguments.flatMap(_.dependsOn).toSet
 }
 
-
-abstract class AggregationValue(functionName: String, inner: Value) extends Value {
-  def apply(m: Map[String, Any]) = m(identifier.name)
-
-  def identifier: Identifier = AggregationIdentifier(functionName + "(" + inner.identifier.name + ")")
-
-  def checkAvailable(symbols: SymbolTable) {
-    inner.checkAvailable(symbols)
-  }
-
-  def createAggregationFunction: AggregationFunction
-
-  def dependsOn: Set[String] = inner.dependsOn
-}
-
-case class Count(anInner: Value) extends AggregationValue("count", anInner) {
-  def createAggregationFunction = new CountFunction(anInner)
-}
-
-case class Sum(anInner: Value) extends AggregationValue("sum", anInner) {
-  def createAggregationFunction = new SumFunction(anInner)
-}
-
-case class Min(anInner: Value) extends AggregationValue("min", anInner) {
-  def createAggregationFunction = new MinFunction(anInner)
-}
-
-case class Max(anInner: Value) extends AggregationValue("max", anInner) {
-  def createAggregationFunction = new MaxFunction(anInner)
-}
-
-case class Avg(anInner: Value) extends AggregationValue("avg", anInner) {
-  def createAggregationFunction = new AvgFunction(anInner)
-}
-
-case class Collect(anInner: Value) extends AggregationValue("collect", anInner) {
-  def createAggregationFunction = new CollectFunction(anInner)
-}
 
 case class NullablePropertyValue(subEntity: String, subProperty: String) extends PropertyValue(subEntity, subProperty) {
   protected override def handleNotFound(propertyContainer: PropertyContainer, x: NotFoundException): Any = null
@@ -117,6 +81,8 @@ case class PropertyValue(entity: String, property: String) extends Value {
   }
 
   def dependsOn: Set[String] = Set(entity)
+
+  override def toString(): String = entity + "." + property
 }
 
 case class RelationshipTypeValue(relationship: Value) extends FunctionValue("TYPE", relationship) {
@@ -125,12 +91,16 @@ case class RelationshipTypeValue(relationship: Value) extends FunctionValue("TYP
   override def checkAvailable(symbols: SymbolTable) {
     symbols.assertHas(RelationshipIdentifier(relationship.identifier.name))
   }
+
+  override def toString() = "type(" + relationship + ")"
 }
 
 case class ArrayLengthValue(inner: Value) extends FunctionValue("LENGTH", inner) {
   def apply(m: Map[String, Any]): Any = inner(m) match {
     case path: Path => path.length()
-    case x => throw new SyntaxException("Expected " + inner.identifier.name + " to be an iterable, but it is not.")
+    case iter:Traversable[_] => iter.toList.length
+    case s:String => s.length()
+    case x => throw new IterableRequiredException(inner)
   }
 }
 
@@ -150,6 +120,24 @@ case class PathNodesValue(path: Value) extends FunctionValue("NODES", path) {
   }
 }
 
+case class Extract(iterable:Value, id:String, expression:Value) extends Value {
+  def apply(m: Map[String, Any]): Any = iterable(m) match {
+    case x:Iterable[Any] => x.map( iterValue => {
+      val innerMap = m + (id -> iterValue)
+      expression(innerMap)
+    })
+    case _ => throw new IterableRequiredException(iterable)
+  }
+
+  def identifier: Identifier = ArrayIdentifier("extract(" + id + " in " + iterable.identifier.name + " : " + expression.identifier.name + ")")
+
+  def checkAvailable(symbols: SymbolTable) {
+    iterable.checkAvailable(symbols)
+  }
+
+  def dependsOn: Set[String] = (iterable.dependsOn ++ expression.dependsOn) - id
+}
+
 case class PathRelationshipsValue(path: Value) extends FunctionValue("RELATIONSHIPS", path) {
   def apply(m: Map[String, Any]): Any = path(m) match {
     case p: Path => p.relationships().asScala.toSeq
@@ -167,6 +155,8 @@ case class EntityValue(entityName: String) extends Value {
   }
 
   def dependsOn: Set[String] = Set(entityName)
+
+  override def toString(): String = entityName
 }
 
 case class ParameterValue(parameterName: String) extends Value {
@@ -174,8 +164,8 @@ case class ParameterValue(parameterName: String) extends Value {
 
   def identifier: Identifier = Identifier(parameterName)
 
-  def checkAvailable(symbols: SymbolTable) {
-  }
+  def checkAvailable(symbols: SymbolTable) {}
 
   def dependsOn: Set[String] = Set(parameterName)
+  override def toString(): String = "{" + parameterName + "}"
 }

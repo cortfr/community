@@ -24,7 +24,6 @@ import java.util.Map;
 
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Relationship;
-import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.graphdb.event.KernelEventHandler;
 import org.neo4j.graphdb.event.TransactionEventHandler;
@@ -40,16 +39,19 @@ import org.neo4j.kernel.impl.nioneo.store.FileSystemAbstraction;
 public class HighlyConfigurableGraphDatabase extends AbstractGraphDatabase
 {
     private final EmbeddedGraphDbImpl impl;
+    protected final FileSystemAbstraction fileSystem;
 
     public HighlyConfigurableGraphDatabase( String storeDir, Map<String, String> config,
             IdGeneratorFactory idGenerators, FileSystemAbstraction fileSystem )
     {
+        super( storeDir );
         config = config != null ? config : MapUtil.stringMap();
-        impl = new EmbeddedGraphDbImpl( storeDir, null, config, this, CommonFactories.defaultLockManagerFactory(),
+        impl = new EmbeddedGraphDbImpl( getStoreDir(), null, config, this, CommonFactories.defaultLockManagerFactory(),
                 idGenerators, CommonFactories.defaultRelationshipTypeCreator(),
                 CommonFactories.defaultTxIdGeneratorFactory(),
-                CommonFactories.defaultTxFinishHook(),
+                CommonFactories.defaultTxHook(),
                 CommonFactories.defaultLastCommittedTxIdSetter(), fileSystem );
+        this.fileSystem = fileSystem;
     }
 
     @Override
@@ -77,19 +79,7 @@ public class HighlyConfigurableGraphDatabase extends AbstractGraphDatabase
     }
 
     @Override
-    public Iterable<Node> getAllNodes()
-    {
-        return impl.getAllNodes();
-    }
-
-    @Override
-    public Iterable<RelationshipType> getRelationshipTypes()
-    {
-        return impl.getRelationshipTypes();
-    }
-
-    @Override
-    public void shutdown()
+    protected void close()
     {
         impl.shutdown();
     }
@@ -133,12 +123,6 @@ public class HighlyConfigurableGraphDatabase extends AbstractGraphDatabase
     }
 
     @Override
-    public String getStoreDir()
-    {
-        return impl.getStoreDir();
-    }
-
-    @Override
     public Config getConfig()
     {
         return impl.getConfig();
@@ -149,10 +133,10 @@ public class HighlyConfigurableGraphDatabase extends AbstractGraphDatabase
     {
         return impl.getManagementBeans( type );
     }
-
+    
     @Override
-    public boolean isReadOnly()
+    public KernelData getKernelData()
     {
-        return false;
+        return impl.getKernelData();
     }
 }

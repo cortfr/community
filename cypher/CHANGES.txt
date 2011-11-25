@@ -1,0 +1,34 @@
+1.6.M01 (2011-11-24)
+--------------------
+o Made zero length (a single node) paths possible
+o Skip, limit and regular expressions can now be parameterized
+o Column order is now preserved
+o Distinct and order by can now be used at the same time
+o Paths can now be optional
+o Execution plans can now be pretty printed
+o Solved a bug when using multiple regular expressions in the same query
+o Added the extract function
+
+1.5 (2011-10-18)
+----------------
+o Added DISTINCT for all aggregate functions
+o Nodes/relationships can be parameters as well
+
+1.5.M02 (2011-10-10)
+--------------------
+o Relationships can now be optional
+o Added new predicated for iterables: ALL/ANY/NONE/SINGLE
+o Added path functions: NODES/RELATIONSHIPS/LENGTH
+o Parameters for literals, index queries and node/relationship id
+o Shortest path added
+o Pattern matcher will, if possible, eliminate subgraphs early, by using the predicates from the WHERE clause
+o Relationships can be bound now
+o Added IS NULL for NULL checking
+o Added new aggregate function - COLLECT
+
+1.5.M01 (2011-08-31)
+--------------------
+o Added paths
+o Changed r.TYPE to type(r)
+o Variable length path supported
+

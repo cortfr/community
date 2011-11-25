@@ -23,6 +23,7 @@ import static org.neo4j.test.GraphDescription.PropType.STRING;
 
 import java.lang.annotation.Annotation;
 import java.lang.annotation.ElementType;
+import java.lang.annotation.Inherited;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -38,9 +39,11 @@ import org.neo4j.graphdb.PropertyContainer;
 import org.neo4j.graphdb.Relationship;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.graphdb.index.AutoIndexer;
+import org.neo4j.tooling.GlobalGraphOperations;
 
 public class GraphDescription implements GraphDefinition
 {
+    @Inherited
     @Target( { ElementType.METHOD, ElementType.TYPE } )
     @Retention( RetentionPolicy.RUNTIME )
     public @interface Graph
@@ -234,7 +237,7 @@ public class GraphDescription implements GraphDefinition
         Transaction tx = db.beginTx();
         try
         {
-            for ( Node node : db.getAllNodes() )
+            for ( Node node : GlobalGraphOperations.at( db ).getAllNodes() )
             {
                 for ( Relationship rel : node.getRelationships() )
                     rel.delete();
@@ -248,7 +251,7 @@ public class GraphDescription implements GraphDefinition
         }
     }
 
-    static GraphDescription create( Graph graph )
+    public static GraphDescription create( Graph graph )
     {
         if ( graph == null )
         {

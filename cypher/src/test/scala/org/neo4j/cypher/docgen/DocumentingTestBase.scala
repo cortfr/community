@@ -27,14 +27,19 @@ import scala.collection.JavaConverters._
 import java.io.{PrintWriter, File, FileWriter}
 import org.neo4j.graphdb._
 import org.neo4j.cypher.parser.CypherParser
-import org.neo4j.cypher.{ExecutionResult, ExecutionEngine}
 import org.scalatest.junit.JUnitSuite
 import java.io.ByteArrayOutputStream
 import org.neo4j.visualization.graphviz.{AsciiDocStyle, GraphvizWriter}
 import org.neo4j.walk.Walker
+import org.neo4j.visualization.asciidoc.AsciidocHelper
+import org.neo4j.cypher.javacompat.GraphImpl
+import org.neo4j.cypher.{ExecutionResult, ExecutionEngine}
+import org.neo4j.cypher.CuteGraphDatabaseService.gds2cuteGds
+
 
 abstract class DocumentingTestBase extends JUnitSuite {
-  var db: GraphDatabaseService = null
+
+  var db: ImpermanentGraphDatabase = null
   val parser: CypherParser = new CypherParser
   var engine: ExecutionEngine = null
   var nodes: Map[String, Node] = null
@@ -57,19 +62,12 @@ abstract class DocumentingTestBase extends JUnitSuite {
     writer.println()
     writer.println("_Query_")
     writer.println()
-    writer.println("[source,cypher]")
-    writer.println("----")
-    writer.println(query)
-    writer.println("----")
+    writer.println(AsciidocHelper.createCypherSnippet(query))
     writer.println()
     writer.println(returns)
     writer.println()
-    writer.println("_Result_")
-    writer.println()
-    writer.println("[queryresult]")
-    writer.println("----")
-    writer.println(result.dumpToString())
-    writer.println("----")
+    writer.println(".Result")
+    writer.println(AsciidocHelper.createQueryResultSnippet(result.dumpToString()))
     writer.println()
     writer.println()
     writer.flush()
@@ -80,7 +78,7 @@ abstract class DocumentingTestBase extends JUnitSuite {
     "target/docs/ql/"
   }
 
-  private def emitGraphviz(fileName:String): String = {
+  private def emitGraphviz(fileName: String): String = {
     val out = new ByteArrayOutputStream();
     val writer = new GraphvizWriter(new AsciiDocStyle());
     writer.emit(out, Walker.fullGraph(db));
@@ -96,7 +94,7 @@ _Graph_
 """.format(out)
   }
 
-  def dumpGraphViz(graphViz: PrintWriter, fileName:String) {
+  def dumpGraphViz(graphViz: PrintWriter, fileName: String) {
     val foo = emitGraphviz(fileName)
     graphViz.write(foo)
     graphViz.flush()
@@ -119,7 +117,7 @@ _Graph_
     dumpToFile(writer, title, query, returns, text, result)
 
     val graphFileName = "cypher-" + this.getClass.getSimpleName.replaceAll("Test", "").toLowerCase + "-graph"
-    val graphViz = new PrintWriter(new FileWriter(new File(dir, graphFileName+ ".txt")))
+    val graphViz = new PrintWriter(new FileWriter(new File(dir, graphFileName + ".txt")))
     dumpGraphViz(graphViz, graphFileName)
   }
 
@@ -138,22 +136,7 @@ _Graph_
 
   @After
   def teardown() {
-    db.shutdown()
-  }
-
-  private def removeReferenceNode(db: GraphDatabaseService) {
-    inTx(() => db.getReferenceNode.delete())
-  }
-
-  def inTx[U](f: () => U): U = {
-    val tx = db.beginTx()
-    try {
-      val x = f()
-      tx.success()
-      x
-    } finally {
-      tx.finish()
-    }
+    if (db != null) db.shutdown()
   }
 
   @Before
@@ -161,12 +144,13 @@ _Graph_
     db = new ImpermanentGraphDatabase()
     engine = new ExecutionEngine(db)
 
-    removeReferenceNode(db)
+    db.cleanContent(false)
 
-    inTx(() => {
+    db.inTx(() => {
       nodeIndex = db.index().forNodes("nodes")
       relIndex = db.index().forRelationships("rels")
-      val description = GraphDescription.create(graphDescription: _*)
+      val g = new GraphImpl(graphDescription.toArray[String])
+      val description = GraphDescription.create(g)
 
       nodes = description.create(db).asScala.toMap
 
@@ -182,3 +166,7 @@ _Graph_
     })
   }
 }
+
+
+
+

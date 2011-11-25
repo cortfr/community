@@ -20,12 +20,14 @@
 package org.neo4j.kernel.impl.batchinsert;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.neo4j.helpers.collection.MapUtil.map;
 
 import java.io.File;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -34,12 +36,14 @@ import java.util.Set;
 
 import org.junit.Test;
 import org.neo4j.graphdb.Direction;
+import org.neo4j.graphdb.DynamicRelationshipType;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Relationship;
 import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.helpers.collection.IteratorUtil;
+import org.neo4j.helpers.collection.MapUtil;
 import org.neo4j.kernel.EmbeddedGraphDatabase;
 import org.neo4j.kernel.impl.AbstractNeo4jTestCase;
 import org.neo4j.kernel.impl.util.StringLogger;
@@ -88,8 +92,16 @@ public class TestBatchInsert
 
     private BatchInserter newBatchInserter()
     {
+        return newBatchInserter( true );
+    }
+
+    private BatchInserter newBatchInserter( boolean eraseOld )
+    {
         String storePath = AbstractNeo4jTestCase.getStorePath( "neo-batch" );
-        AbstractNeo4jTestCase.deleteFileOrDirectory( new File( storePath ) );
+        if ( eraseOld )
+        {
+            AbstractNeo4jTestCase.deleteFileOrDirectory( new File( storePath ) );
+        }
         return new BatchInserterImpl( storePath );
     }
 
@@ -106,6 +118,203 @@ public class TestBatchInsert
         assertEquals( rel.getEndNode(), node2 );
         assertEquals( RelTypes.BATCH_TEST.name(), rel.getType().name() );
         graphDb.shutdown();
+    }
+
+    @Test
+    public void testPropertySetFromGraphDbIsPersisted()
+    {
+        BatchInserter inserter = newBatchInserter();
+
+        GraphDatabaseService gds = inserter.getGraphDbService();
+
+        Node from = gds.createNode();
+        long fromId = from.getId();
+
+        Node to = gds.createNode();
+        long toId = to.getId();
+
+        Relationship rel = from.createRelationshipTo( to,
+                DynamicRelationshipType.withName( "PROP_TEST" ) );
+        long relId = rel.getId();
+
+        from.setProperty( "1", "one" );
+        to.setProperty( "2", "two" );
+        rel.setProperty( "3", "three" );
+
+        inserter.shutdown();
+
+        GraphDatabaseService db = newBatchInserter( false /*delete old dir*/).getGraphDbService();
+        from = db.getNodeById( fromId );
+        assertEquals( "one", from.getProperty( "1" ) );
+        to = db.getNodeById( toId );
+        assertEquals( "two", to.getProperty( "2" ) );
+        rel = db.getRelationshipById( relId );
+        assertEquals( "three", rel.getProperty( "3" ) );
+        db.shutdown();
+    }
+
+    @Test
+    public void testSetAndKeepNodeProperty()
+    {
+        BatchInserter inserter = newBatchInserter();
+
+        long tehNode = inserter.createNode( MapUtil.map( "foo", "bar" ) );
+        inserter.setNodeProperty( tehNode, "foo2", "bar2" );
+        Map<String, Object> props = inserter.getNodeProperties( tehNode );
+        assertEquals( 2, props.size() );
+        assertEquals( "bar", props.get( "foo" ) );
+        assertEquals( "bar2", props.get( "foo2" ) );
+
+        inserter.shutdown();
+
+        inserter = newBatchInserter( false /*delete old dir*/);
+
+        props = inserter.getNodeProperties( tehNode );
+        assertEquals( 2, props.size() );
+        assertEquals( "bar", props.get( "foo" ) );
+        assertEquals( "bar2", props.get( "foo2" ) );
+
+        inserter.setNodeProperty( tehNode, "foo", "bar3" );
+
+        props = inserter.getNodeProperties( tehNode );
+        assertEquals( "bar3", props.get( "foo" ) );
+        assertEquals( 2, props.size() );
+        assertEquals( "bar3", props.get( "foo" ) );
+        assertEquals( "bar2", props.get( "foo2" ) );
+
+        inserter.shutdown();
+        inserter = newBatchInserter( false /*delete old dir*/);
+
+        props = inserter.getNodeProperties( tehNode );
+        assertEquals( "bar3", props.get( "foo" ) );
+        assertEquals( 2, props.size() );
+        assertEquals( "bar3", props.get( "foo" ) );
+        assertEquals( "bar2", props.get( "foo2" ) );
+
+        inserter.shutdown();
+    }
+
+    @Test
+    public void testSetAndKeepRelationshipProperty()
+    {
+        BatchInserter inserter = newBatchInserter();
+
+        long from = inserter.createNode( Collections.EMPTY_MAP );
+        long to = inserter.createNode( Collections.EMPTY_MAP );
+        long theRel = inserter.createRelationship( from, to,
+                DynamicRelationshipType.withName( "TestingPropsHere" ),
+                MapUtil.map( "foo", "bar" ) );
+        inserter.setRelationshipProperty( theRel, "foo2", "bar2" );
+        Map<String, Object> props = inserter.getRelationshipProperties( theRel );
+        assertEquals( 2, props.size() );
+        assertEquals( "bar", props.get( "foo" ) );
+        assertEquals( "bar2", props.get( "foo2" ) );
+
+        inserter.shutdown();
+
+        inserter = newBatchInserter( false /*delete old dir*/);
+
+        props = inserter.getRelationshipProperties( theRel );
+        assertEquals( 2, props.size() );
+        assertEquals( "bar", props.get( "foo" ) );
+        assertEquals( "bar2", props.get( "foo2" ) );
+
+        inserter.setRelationshipProperty( theRel, "foo", "bar3" );
+
+        props = inserter.getRelationshipProperties( theRel );
+        assertEquals( "bar3", props.get( "foo" ) );
+        assertEquals( 2, props.size() );
+        assertEquals( "bar3", props.get( "foo" ) );
+        assertEquals( "bar2", props.get( "foo2" ) );
+
+        inserter.shutdown();
+        inserter = newBatchInserter( false /*delete old dir*/);
+
+        props = inserter.getRelationshipProperties( theRel );
+        assertEquals( "bar3", props.get( "foo" ) );
+        assertEquals( 2, props.size() );
+        assertEquals( "bar3", props.get( "foo" ) );
+        assertEquals( "bar2", props.get( "foo2" ) );
+
+        inserter.shutdown();
+    }
+
+    @Test
+    public void testNodeHasProperty()
+    {
+        BatchInserter inserter = newBatchInserter();
+
+        long theNode = inserter.createNode( properties );
+        long anotherNode = inserter.createNode( Collections.EMPTY_MAP );
+        long relationship = inserter.createRelationship( theNode, anotherNode,
+                DynamicRelationshipType.withName( "foo" ), properties );
+        for ( String key : properties.keySet() )
+        {
+            assertTrue( inserter.nodeHasProperty( theNode, key ) );
+            assertFalse( inserter.nodeHasProperty( theNode, key + "-" ) );
+            assertTrue( inserter.relationshipHasProperty( relationship, key ) );
+            assertFalse( inserter.relationshipHasProperty( relationship, key
+                                                                         + "-" ) );
+        }
+
+        inserter.shutdown();
+    }
+
+    @Test
+    public void testRemoveProperties()
+    {
+        BatchInserter inserter = newBatchInserter();
+
+        long theNode = inserter.createNode( properties );
+        long anotherNode = inserter.createNode( Collections.EMPTY_MAP );
+        long relationship = inserter.createRelationship( theNode, anotherNode,
+                DynamicRelationshipType.withName( "foo" ), properties );
+
+        inserter.removeNodeProperty( theNode, "key0" );
+        inserter.removeRelationshipProperty( relationship, "key1" );
+
+        for ( String key : properties.keySet() )
+        {
+            if ( key.equals( "key0" ) )
+            {
+                assertFalse( inserter.nodeHasProperty( theNode, key ) );
+                assertTrue( inserter.relationshipHasProperty( relationship, key ) );
+            }
+            else if ( key.equals( "key1" ) )
+            {
+                assertTrue( inserter.nodeHasProperty( theNode, key ) );
+                assertFalse( inserter.relationshipHasProperty( relationship,
+                        key ) );
+            }
+            else
+            {
+                assertTrue( inserter.nodeHasProperty( theNode, key ) );
+                assertTrue( inserter.relationshipHasProperty( relationship, key ) );
+            }
+        }
+        inserter.shutdown();
+        inserter = newBatchInserter( false /*delete old dir*/);
+
+        for ( String key : properties.keySet() )
+        {
+            if ( key.equals( "key0" ) )
+            {
+                assertFalse( inserter.nodeHasProperty( theNode, key ) );
+                assertTrue( inserter.relationshipHasProperty( relationship, key ) );
+            }
+            else if ( key.equals( "key1" ) )
+            {
+                assertTrue( inserter.nodeHasProperty( theNode, key ) );
+                assertFalse( inserter.relationshipHasProperty( relationship,
+                        key ) );
+            }
+            else
+            {
+                assertTrue( inserter.nodeHasProperty( theNode, key ) );
+                assertTrue( inserter.relationshipHasProperty( relationship, key ) );
+            }
+        }
+        inserter.shutdown();
     }
 
     @Test
@@ -127,6 +336,19 @@ public class TestBatchInsert
             assertEquals( rel.getStartNode(), startNode );
         }
         graphDb.setNodeProperties( startNode, properties );
+        graphDb.shutdown();
+    }
+
+    @Test
+    public void testPropSetAndReset()
+    {
+        BatchInserter graphDb = newBatchInserter();
+        long startNode = graphDb.createNode( properties );
+        assertProperties( graphDb.getGraphDbService().getNodeById( startNode ) );
+        graphDb.setNodeProperties( startNode, properties );
+        assertProperties( graphDb.getGraphDbService().getNodeById( startNode ) );
+        graphDb.setNodeProperties( startNode, properties );
+        assertProperties( graphDb.getGraphDbService().getNodeById( startNode ) );
         graphDb.shutdown();
     }
 
@@ -193,6 +415,107 @@ public class TestBatchInsert
         for ( String key : properties.keySet() )
         {
             rel.setProperty( key, properties.get( key ) );
+        }
+    }
+
+    private void assertProperties( Node node )
+    {
+        for ( String key : properties.keySet() )
+        {
+            if ( properties.get( key ).getClass().isArray() )
+            {
+                Class<?> component = properties.get( key ).getClass().getComponentType();
+                if ( !component.isPrimitive() ) // then it is String, cast to
+                                                // Object[] is safe
+                {
+                    assertTrue( Arrays.equals(
+                            (Object[]) properties.get( key ),
+                            (Object[]) node.getProperty( key ) ) );
+                }
+                else
+                {
+                    if ( component == Integer.TYPE )
+                    {
+                        if ( component.isPrimitive() )
+                        {
+                            assertTrue( Arrays.equals(
+                                    (int[]) properties.get( key ),
+                                    (int[]) node.getProperty( key ) ) );
+                        }
+                    }
+                    else if ( component == Boolean.TYPE )
+                    {
+                        if ( component.isPrimitive() )
+                        {
+                            assertTrue( Arrays.equals(
+                                    (boolean[]) properties.get( key ),
+                                    (boolean[]) node.getProperty( key ) ) );
+                        }
+                    }
+                    else if ( component == Byte.TYPE )
+                    {
+                        if ( component.isPrimitive() )
+                        {
+                            assertTrue( Arrays.equals(
+                                    (byte[]) properties.get( key ),
+                                    (byte[]) node.getProperty( key ) ) );
+                        }
+                    }
+                    else if ( component == Character.TYPE )
+                    {
+                        if ( component.isPrimitive() )
+                        {
+                            assertTrue( Arrays.equals(
+                                    (char[]) properties.get( key ),
+                                    (char[]) node.getProperty( key ) ) );
+                        }
+                    }
+                    else if ( component == Long.TYPE )
+                    {
+                        if ( component.isPrimitive() )
+                        {
+                            assertTrue( Arrays.equals(
+                                    (long[]) properties.get( key ),
+                                    (long[]) node.getProperty( key ) ) );
+                        }
+                    }
+                    else if ( component == Float.TYPE )
+                    {
+                        if ( component.isPrimitive() )
+                        {
+                            assertTrue( Arrays.equals(
+                                    (float[]) properties.get( key ),
+                                    (float[]) node.getProperty( key ) ) );
+                        }
+                    }
+                    else if ( component == Double.TYPE )
+                    {
+                        if ( component.isPrimitive() )
+                        {
+                            assertTrue( Arrays.equals(
+                                    (double[]) properties.get( key ),
+                                    (double[]) node.getProperty( key ) ) );
+                        }
+                    }
+                    else if ( component == Short.TYPE )
+                    {
+                        if ( component.isPrimitive() )
+                        {
+                            assertTrue( Arrays.equals(
+                                    (short[]) properties.get( key ),
+                                    (short[]) node.getProperty( key ) ) );
+                        }
+                    }
+                }
+            }
+            else
+            {
+                assertEquals( properties.get( key ), node.getProperty( key ) );
+            }
+        }
+        for ( String stored : node.getPropertyKeys() )
+        {
+            assertTrue( properties.containsKey( stored ) );
         }
     }
 
@@ -295,12 +618,12 @@ public class TestBatchInsert
         inserter.shutdown();
         assertTrue( new File( storeDir, StringLogger.DEFAULT_NAME ).delete() );
     }
-    
+
     @Test
     public void createEntitiesWithEmptyPropertiesMap() throws Exception
     {
         BatchInserter inserter = newBatchInserter();
-        
+
         // Assert for node
         long nodeId = inserter.createNode( map() );
         inserter.getNodeProperties( nodeId );
@@ -312,15 +635,15 @@ public class TestBatchInsert
         inserter.getRelationshipProperties( relId );
         inserter.shutdown();
     }
-    
+
     @Test
     public void createEntitiesWithDynamicPropertiesMap() throws Exception
     {
         BatchInserter inserter = newBatchInserter();
-        
+
         setAndGet( inserter, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type" );
         setAndGet( inserter, intArray( 20 ) );
-        
+
         inserter.shutdown();
     }
 

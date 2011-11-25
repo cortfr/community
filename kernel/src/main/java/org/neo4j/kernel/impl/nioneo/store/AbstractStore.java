@@ -20,7 +20,6 @@
 package org.neo4j.kernel.impl.nioneo.store;
 
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -82,7 +81,7 @@ public abstract class AbstractStore extends CommonAbstractStore
      *             If fileName is null or if file exists
      */
     protected static void createEmptyStore( String fileName,
-        String typeAndVersionDescriptor, IdGeneratorFactory idGeneratorFactory )
+        String typeAndVersionDescriptor, IdGeneratorFactory idGeneratorFactory, FileSystemAbstraction fileSystem )
     {
         // sanity checks
         if ( fileName == null )
@@ -99,7 +98,7 @@ public abstract class AbstractStore extends CommonAbstractStore
         // write the header
         try
         {
-            FileChannel channel = new FileOutputStream( fileName ).getChannel();
+            FileChannel channel = fileSystem.create( fileName );
             int endHeaderSize = UTF8.encode( typeAndVersionDescriptor ).length;
             ByteBuffer buffer = ByteBuffer.allocate( endHeaderSize );
             buffer.put( UTF8.encode( typeAndVersionDescriptor ) ).flip();
@@ -120,16 +119,19 @@ public abstract class AbstractStore extends CommonAbstractStore
         super( fileName, config, idType );
     }
 
+    @Override
     protected int getEffectiveRecordSize()
     {
         return getRecordSize();
     }
 
+    @Override
     protected void readAndVerifyBlockSize() throws IOException
     {
         // record size is fixed for non-dynamic stores, so nothing to do here
     }
 
+    @Override
     protected void verifyFileSizeAndTruncate() throws IOException
     {
         int expectedVersionLength = UTF8.encode( buildTypeDescriptorAndVersion( getTypeDescriptor() ) ).length;
@@ -212,7 +214,7 @@ public abstract class AbstractStore extends CommonAbstractStore
             assert success;
         }
         createIdGenerator( getStorageFileName() + ".id" );
-        openIdGenerator();
+        openIdGenerator( false );
         FileChannel fileChannel = getFileChannel();
         long highId = 1;
         long defraggedCount = 0;
@@ -269,15 +271,14 @@ public abstract class AbstractStore extends CommonAbstractStore
         setHighId( highId + 1 );
         if ( getConfig() != null )
         {
-            String storeDir = (String) getConfig().get( "store_dir" );
-            StringLogger msgLog = StringLogger.getLogger( storeDir );
+            StringLogger msgLog = (StringLogger) getConfig().get( StringLogger.class );
             msgLog.logMessage( getStorageFileName() + " rebuild id generator, highId=" + getHighId() +
                     " defragged count=" + defraggedCount, true );
         }
         logger.fine( "[" + getStorageFileName() + "] high id=" + getHighId()
             + " (defragged=" + defraggedCount + ")" );
         closeIdGenerator();
-        openIdGenerator();
+        openIdGenerator( false );
     }
 
     public abstract List<WindowPoolStats> getAllWindowPoolStats();

@@ -28,6 +28,7 @@ import org.junit.Test;
 import org.neo4j.graphdb.Node;
 import org.neo4j.kernel.impl.AbstractNeo4jTestCase;
 
+@AbstractNeo4jTestCase.RequiresPersistentGraphDatabase
 public class TestPropertyTypes extends AbstractNeo4jTestCase
 {
     private Node node1 = null;
@@ -606,15 +607,6 @@ public class TestPropertyTypes extends AbstractNeo4jTestCase
         assertTrue( !node1.hasProperty( key ) );
     }
 
-    @Test
-    public void testLargeProperties()
-    {
-        byte[] bytes = new byte[10*1024*1024];
-        node1.setProperty( "large_array", bytes );
-        node1.setProperty( "large_string", new String( bytes ) );
-        newTransaction();
-    }
-    
     @Test
     public void testEmptyString() throws Exception
     {

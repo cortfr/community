@@ -36,7 +36,7 @@ class SymbolTable(val identifiers: Set[Identifier]) {
 
     val actual = getOrElse(name, () => throw new SyntaxException("Unknown identifier \"" + name + "\"."))
     if (!expected.getClass.isAssignableFrom(actual.getClass)) {
-      throw new SyntaxException("Expected " + name + " to be a " + expected.getClass.getSimpleName + " but it was " + actual.getClass.getSimpleName)
+      throw new SyntaxException("Expected `" + name + "` to be a " + expected.getClass.getSimpleName + " but it was " + actual.getClass.getSimpleName)
     }
   }
 
@@ -85,4 +85,6 @@ class SymbolTable(val identifiers: Set[Identifier]) {
   def ++(other: SymbolTable): SymbolTable = {
     new SymbolTable(merge(other))
   }
+
+  def columns : String = identifiers.map(_.name).mkString(", ")
 }

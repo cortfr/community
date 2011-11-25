@@ -21,23 +21,22 @@ package org.neo4j.server.webadmin.console;
 
 import static org.junit.Assert.assertEquals;
 
-import org.junit.After;
-import org.junit.Before;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.neo4j.server.database.Database;
 import org.neo4j.test.ImpermanentGraphDatabase;
 
 public class GremlinSessionTest
 {
-    private static final String TARGET_TEMPDB = "target/tempdb";
     private static final String NEWLINE = System.getProperty( "line.separator" );
-    private ScriptSession session;
-    private Database database;
+    private static ScriptSession session;
+    private static Database database;
 
     @Test
     public void retrievesTheReferenceNode()
     {
-        String result = session.evaluate( "g" );
+        String result = session.evaluate( "g" ).first();
 
         assertEquals( String.format( "neo4jgraph[%s]" + NEWLINE, database.graph.toString() ), result );
     }
@@ -45,10 +44,10 @@ public class GremlinSessionTest
     @Test
     public void multiLineTest()
     {
-        String result = session.evaluate( "for (i in 0..2) {" );
-        result = session.evaluate( "println 'hi'" );
-        result = session.evaluate( "}" );
-        result = session.evaluate( "i = 2" );
+        String result = session.evaluate( "for (i in 0..2) {" ).first();
+        result = session.evaluate( "println 'hi'" ).first();
+        result = session.evaluate( "}" ).first();
+        result = session.evaluate( "i = 2" ).first();
 
         assertEquals( "2" + NEWLINE, result );
     }
@@ -56,28 +55,28 @@ public class GremlinSessionTest
     @Test
     public void canCreateNodesAndEdgesInGremlinLand()
     {
-        String result = session.evaluate( "g.addVertex(null)" );
+        String result = session.evaluate( "g.addVertex(null)" ).first();
         assertEquals( "v[1]" + NEWLINE, result );
-        result = session.evaluate( "g.V >> 2" );
+        result = session.evaluate( "g.V >> 2" ).first();
         assertEquals( "v[0]" + NEWLINE + "v[1]" + NEWLINE, result );
-        result = session.evaluate( "g.addVertex(null)" );
+        result = session.evaluate( "g.addVertex(null)" ).first();
         assertEquals( "v[2]" + NEWLINE, result );
-        result = session.evaluate( "g.addEdge(g.v(1), g.v(2), 'knows')" );
+        result = session.evaluate( "g.addEdge(g.v(1), g.v(2), 'knows')" ).first();
         assertEquals( "e[0][1-knows->2]" + NEWLINE, result );
-        result = session.evaluate( "g.v(1).out" );
+        result = session.evaluate( "g.v(1).out" ).first();
         assertEquals( "v[2]" + NEWLINE, result );
     }
 
-    @Before
-    public void setUp() throws Exception
+    @BeforeClass
+    public static void setUp() throws Exception
     {
-        this.database = new Database( new ImpermanentGraphDatabase( TARGET_TEMPDB ) );
+        database = new Database( new ImpermanentGraphDatabase() );
         session = new GremlinSession( database );
     }
 
-    @After
-    public void shutdownDatabase()
+    @AfterClass
+    public static void shutdownDatabase()
     {
-        this.database.shutdown();
+        database.shutdown();
     }
 }

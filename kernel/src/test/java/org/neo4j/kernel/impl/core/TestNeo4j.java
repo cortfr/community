@@ -23,7 +23,6 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import java.util.HashMap;
 import java.util.Iterator;
@@ -36,12 +35,15 @@ import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Relationship;
 import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
+import org.neo4j.helpers.collection.IteratorUtil;
+import org.neo4j.kernel.AbstractGraphDatabase;
 import org.neo4j.kernel.Config;
 import org.neo4j.kernel.EmbeddedGraphDatabase;
 import org.neo4j.kernel.impl.AbstractNeo4jTestCase;
 import org.neo4j.kernel.impl.MyRelTypes;
 import org.neo4j.kernel.impl.transaction.XaDataSourceManager;
 import org.neo4j.kernel.impl.transaction.xaframework.XaDataSource;
+import org.neo4j.tooling.GlobalGraphOperations;
 
 public class TestNeo4j extends AbstractNeo4jTestCase
 {
@@ -59,25 +61,16 @@ public class TestNeo4j extends AbstractNeo4jTestCase
         {
             // ok no one set, oldReferenceNode is null then
         }
-        try
-        {
-            GraphDbModule graphDbModule = ((EmbeddedGraphDatabase) getGraphDb()).getConfig()
-                .getGraphDbModule();
+        GraphDbModule graphDbModule = ( (AbstractGraphDatabase) getGraphDb() ).getConfig().getGraphDbModule();
 
-            Node newReferenceNode = getGraphDb().createNode();
-            graphDbModule.setReferenceNodeId( newReferenceNode.getId() );
-            assertEquals( newReferenceNode, getGraphDb().getReferenceNode() );
-            newReferenceNode.delete();
-            if ( oldReferenceNode != null )
-            {
-                graphDbModule.setReferenceNodeId( oldReferenceNode.getId() );
-                assertEquals( oldReferenceNode, getGraphDb().getReferenceNode() );
-            }
-        }
-        catch ( Exception e )
+        Node newReferenceNode = getGraphDb().createNode();
+        graphDbModule.setReferenceNodeId( newReferenceNode.getId() );
+        assertEquals( newReferenceNode, getGraphDb().getReferenceNode() );
+        newReferenceNode.delete();
+        if ( oldReferenceNode != null )
         {
-            e.printStackTrace();
-            fail( "" + e );
+            graphDbModule.setReferenceNodeId( oldReferenceNode.getId() );
+            assertEquals( oldReferenceNode, getGraphDb().getReferenceNode() );
         }
     }
 
@@ -167,7 +160,7 @@ public class TestNeo4j extends AbstractNeo4jTestCase
     @Test
     public void testIdUsageInfo()
     {
-        GraphDbModule graphDbModule = ((EmbeddedGraphDatabase) getGraphDb()).getConfig()
+        GraphDbModule graphDbModule = ((AbstractGraphDatabase) getGraphDb()).getConfig()
             .getGraphDbModule();
         NodeManager nm = graphDbModule.getNodeManager();
         long nodeCount = nm.getNumberOfIdsInUse( Node.class );
@@ -194,15 +187,8 @@ public class TestNeo4j extends AbstractNeo4jTestCase
         n1.delete();
         n2.delete();
         // must commit for ids to be reused
-        try
-        {
-            getTransaction().success();
-            getTransaction().finish();
-        }
-        catch ( Exception e )
-        {
-            fail( "" + e );
-        }
+        getTransaction().success();
+        getTransaction().finish();
         // assertEquals( nodeCount, nm.getNumberOfIdsInUse( Node.class ) );
         // assertEquals( relCount, nm.getNumberOfIdsInUse( Relationship.class )
         // );
@@ -286,22 +272,18 @@ public class TestNeo4j extends AbstractNeo4jTestCase
     }
     
     @Test
-    public void testGetAllNode()
+    public void testGetAllNodes()
     {
         long highId = getNodeManager().getHighestPossibleIdInUse( Node.class );
         if ( highId >= 0 && highId < 10000 )
         {
-            int count = 0;
-            for ( Node node : getEmbeddedGraphDb().getAllNodes() )
-            {
-                count++;
-            }
+            int count = IteratorUtil.count( GlobalGraphOperations.at( getGraphDb() ).getAllNodes() );
             boolean found = false;
             Node newNode = getGraphDb().createNode();
             newTransaction();
             int oldCount = count;
             count = 0;
-            for ( Node node : getEmbeddedGraphDb().getAllNodes() )
+            for ( Node node : GlobalGraphOperations.at( getGraphDb() ).getAllNodes() )
             {
                 count++;
                 if ( node.equals( newNode ) )
@@ -313,15 +295,14 @@ public class TestNeo4j extends AbstractNeo4jTestCase
             assertEquals( count, oldCount + 1 );
             
             // Tests a bug in the "all nodes" iterator
-            Iterator<Node> allNodesIterator =
-                getEmbeddedGraphDb().getAllNodes().iterator();
+            Iterator<Node> allNodesIterator = GlobalGraphOperations.at( getGraphDb() ).getAllNodes().iterator();
             assertNotNull( allNodesIterator.next() );
             
             newNode.delete();
             newTransaction();
             found = false;
             count = 0;
-            for ( Node node : getEmbeddedGraphDb().getAllNodes() )
+            for ( Node node : GlobalGraphOperations.at( getGraphDb() ).getAllNodes() )
             {
                 count++;
                 if ( node.equals( newNode ) )
@@ -396,5 +377,6 @@ public class TestNeo4j extends AbstractNeo4jTestCase
         xaDsMgr = db.getConfig().getTxModule().getXaDataSourceManager();
         xaDs = xaDsMgr.getXaDataSource( Config.DEFAULT_DATA_SOURCE_NAME );
         assertTrue( xaDs.isLogicalLogKept() );
+        db.shutdown();
     }
 }

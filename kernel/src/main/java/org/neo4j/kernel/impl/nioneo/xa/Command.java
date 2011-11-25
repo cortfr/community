@@ -27,6 +27,7 @@ import java.util.logging.Logger;
 
 import org.neo4j.kernel.impl.nioneo.store.DynamicRecord;
 import org.neo4j.kernel.impl.nioneo.store.NeoStore;
+import org.neo4j.kernel.impl.nioneo.store.NeoStoreRecord;
 import org.neo4j.kernel.impl.nioneo.store.NodeRecord;
 import org.neo4j.kernel.impl.nioneo.store.NodeStore;
 import org.neo4j.kernel.impl.nioneo.store.PropertyBlock;
@@ -57,6 +58,8 @@ public abstract class Command extends XaCommand
     {
         this.key = key;
     }
+    
+    public abstract void accept( CommandRecordVisitor visitor );
 
     @Override
     protected void setRecovered()
@@ -282,6 +285,7 @@ public abstract class Command extends XaCommand
     private static final byte REL_COMMAND = (byte) 3;
     private static final byte REL_TYPE_COMMAND = (byte) 4;
     private static final byte PROP_INDEX_COMMAND = (byte) 5;
+    private static final byte NEOSTORE_COMMAND = (byte) 6;
 
     static class NodeCommand extends Command
     {
@@ -293,6 +297,12 @@ public abstract class Command extends XaCommand
             super( record.getId() );
             this.record = record;
             this.store = store;
+        }
+        
+        @Override
+        public void accept( CommandRecordVisitor visitor )
+        {
+            visitor.visitNode( record );
         }
 
         @Override
@@ -324,7 +334,7 @@ public abstract class Command extends XaCommand
         @Override
         public String toString()
         {
-            return "NodeCommand[" + record + "]";
+            return record.toString();
         }
 
         @Override
@@ -403,6 +413,12 @@ public abstract class Command extends XaCommand
             this.record = record;
             this.store = store;
         }
+        
+        @Override
+        public void accept( CommandRecordVisitor visitor )
+        {
+            visitor.visitRelationship( record );
+        }
 
         @Override
         boolean isCreated()
@@ -448,7 +464,7 @@ public abstract class Command extends XaCommand
         @Override
         public String toString()
         {
-            return "RelationshipCommand[" + record + "]";
+            return record.toString();
         }
 
         @Override
@@ -533,6 +549,69 @@ public abstract class Command extends XaCommand
             return getKey() == ((Command) o).getKey();
         }
     }
+    
+    static class NeoStoreCommand extends Command
+    {
+        private final NeoStoreRecord record;
+        private final NeoStore neoStore;
+
+        NeoStoreCommand( NeoStore neoStore, NeoStoreRecord record )
+        {
+            super( -1 );
+            this.neoStore = neoStore;
+            this.record = record;
+        }
+
+        @Override
+        boolean isCreated()
+        {
+            return record.isCreated();
+        }
+
+        @Override
+        boolean isDeleted()
+        {
+            return !record.inUse();
+        }
+
+        @Override
+        public void execute()
+        {
+            neoStore.setGraphNextProp( record.getNextProp() );
+        }
+        
+        @Override
+        public void accept( CommandRecordVisitor visitor )
+        {
+            visitor.visitNeoStore( record );
+        }
+        
+        @Override
+        public String toString()
+        {
+            return record.toString();
+        }
+
+        @Override
+        public void writeToFile( LogBuffer buffer ) throws IOException
+        {
+            buffer.put( NEOSTORE_COMMAND ).putLong( record.getNextProp() );
+        }
+
+        public static Command readCommand( NeoStore neoStore,
+                ReadableByteChannel byteChannel, ByteBuffer buffer )
+                throws IOException
+        {
+            buffer.clear();
+            buffer.limit( 8 );
+            if ( byteChannel.read( buffer ) != buffer.limit() ) return null;
+            buffer.flip();
+            long nextProp = buffer.getLong();
+            NeoStoreRecord record = new NeoStoreRecord();
+            record.setNextProp( nextProp );
+            return new NeoStoreCommand( neoStore, record );
+        }
+    }
 
     static class PropertyIndexCommand extends Command
     {
@@ -545,6 +624,12 @@ public abstract class Command extends XaCommand
             super( record.getId() );
             this.record = record;
             this.store = store;
+        }
+        
+        @Override
+        public void accept( CommandRecordVisitor visitor )
+        {
+            visitor.visitPropertyIndex( record );
         }
 
         @Override
@@ -576,7 +661,7 @@ public abstract class Command extends XaCommand
         @Override
         public String toString()
         {
-            return "PropertyIndexCommand[" + record + "]";
+            return record.toString();
         }
 
         @Override
@@ -668,6 +753,12 @@ public abstract class Command extends XaCommand
             this.record = record;
             this.store = store;
         }
+        
+        @Override
+        public void accept( CommandRecordVisitor visitor )
+        {
+            visitor.visitProperty( record );
+        }
 
         @Override
         boolean isCreated()
@@ -708,7 +799,7 @@ public abstract class Command extends XaCommand
         @Override
         public String toString()
         {
-            return "PropertyCommand[" + record + "]";
+            return record.toString();
         }
 
         @Override
@@ -873,6 +964,12 @@ public abstract class Command extends XaCommand
             this.record = record;
             this.store = store;
         }
+        
+        @Override
+        public void accept( CommandRecordVisitor visitor )
+        {
+            visitor.visitRelationshipType( record );
+        }
 
         @Override
         boolean isCreated()
@@ -903,7 +1000,7 @@ public abstract class Command extends XaCommand
         @Override
         public String toString()
         {
-            return "RelationshipTypeCommand[" + record + "]";
+            return record.toString();
         }
 
         @Override
@@ -1003,6 +1100,8 @@ public abstract class Command extends XaCommand
             case REL_TYPE_COMMAND:
                 return RelationshipTypeCommand.readCommand( neoStore,
                     byteChannel, buffer );
+            case NEOSTORE_COMMAND:
+                return NeoStoreCommand.readCommand( neoStore, byteChannel, buffer );
             case NONE: return null;
             default:
                 throw new IOException( "Unknown command type[" + commandType

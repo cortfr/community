@@ -20,18 +20,41 @@
 package org.neo4j.cypher.pipes
 
 import org.neo4j.cypher.SymbolTable
+import org.neo4j.cypher.commands.Value
+import java.lang.String
 
-class SlicePipe(source:Pipe, skip:Option[Int], limit:Option[Int]) extends Pipe {
+class SlicePipe(source:Pipe, skip:Option[Value], limit:Option[Value]) extends Pipe {
   val symbols: SymbolTable = source.symbols
 
+  //TODO: Make this nicer. I'm sure it's expensive and silly.
   def foreach[U](f: (Map[String, Any]) => U) {
+    if(source.isEmpty)
+      return
+
+    val first: Map[String, Any] = source.head
+
+    def asInt(v:Value)=v(first).asInstanceOf[Int]
+
     val slicedResult = (skip, limit) match {
       case (None, None) => source
-      case (Some(x), None) => source.drop(x)
-      case (None, Some(x)) => source.take(x)
-      case (Some(startAt), Some(count)) => source.slice(startAt, startAt + count)
+      case (Some(x), None) => source.drop(asInt(x))
+      case (None, Some(x)) => source.take(asInt(x))
+      case (Some(startAt), Some(count)) => {
+        val start = asInt(startAt)
+        source.slice(start, start + asInt(count))
+      }
     }
 
     slicedResult.foreach(f)
+  }
+
+  override def executionPlan(): String = {
+
+    val info = (skip, limit) match {
+      case (None, Some(l)) => "Limit: " + l.toString()
+      case (Some(s), None) => "Skip: " + s.toString()
+      case (Some(s), Some(l)) => "Skip: " + s.toString() + ", " + "Limit: " + l.toString()
+    }
+    source.executionPlan() + "\r\n" + "Slice(" + info + ")"
   }
 }

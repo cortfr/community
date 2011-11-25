@@ -26,11 +26,9 @@ import java.lang.reflect.Method;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.NoSuchElementException;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -43,7 +41,6 @@ import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.NotFoundException;
 import org.neo4j.graphdb.Relationship;
-import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.Transaction;
 import org.neo4j.graphdb.TransactionFailureException;
 import org.neo4j.graphdb.event.KernelEventHandler;
@@ -61,7 +58,7 @@ import org.neo4j.kernel.impl.index.IndexStore;
 import org.neo4j.kernel.impl.nioneo.store.FileSystemAbstraction;
 import org.neo4j.kernel.impl.nioneo.store.StoreId;
 import org.neo4j.kernel.impl.transaction.LockManager;
-import org.neo4j.kernel.impl.transaction.TxFinishHook;
+import org.neo4j.kernel.impl.transaction.TxHook;
 import org.neo4j.kernel.impl.transaction.TxModule;
 import org.neo4j.kernel.impl.transaction.xaframework.LogBufferFactory;
 import org.neo4j.kernel.impl.transaction.xaframework.TxIdGeneratorFactory;
@@ -102,16 +99,16 @@ class EmbeddedGraphDbImpl
      * @param config configuration parameters
      */
     public EmbeddedGraphDbImpl( String storeDir, StoreId storeId, Map<String, String> inputParams,
-            GraphDatabaseService graphDbService, LockManagerFactory lockManagerFactory,
+            AbstractGraphDatabase graphDbService, LockManagerFactory lockManagerFactory,
             IdGeneratorFactory idGeneratorFactory, RelationshipTypeCreator relTypeCreator,
-            TxIdGeneratorFactory txIdFactory, TxFinishHook finishHook,
+            TxIdGeneratorFactory txIdFactory, TxHook txHook,
             LastCommittedTxIdSetter lastCommittedTxIdSetter, FileSystemAbstraction fileSystem )
     {
         this.storeDir = storeDir;
-        TxModule txModule = newTxModule( inputParams, finishHook );
+        TxModule txModule = newTxModule( inputParams, txHook, graphDbService.getMessageLog(), fileSystem );
         LockManager lockManager = lockManagerFactory.create( txModule );
         LockReleaser lockReleaser = new LockReleaser( lockManager, txModule.getTxManager() );
-        final Config config = new Config( graphDbService, storeDir, storeId, inputParams,
+        final Config config = new Config( graphDbService, storeId, inputParams,
                 kernelPanicEventGenerator, txModule, lockManager, lockReleaser, idGeneratorFactory,
                 new SyncHookFactory(), relTypeCreator, txIdFactory.create( txModule.getTxManager() ),
                 lastCommittedTxIdSetter, fileSystem );
@@ -122,7 +119,7 @@ class EmbeddedGraphDbImpl
         config.getParams().put( LogBufferFactory.class,
                 CommonFactories.defaultLogBufferFactory() );
         graphDbInstance = new GraphDbInstance( storeDir, true, config );
-        this.msgLog = StringLogger.getLogger( storeDir );
+        this.msgLog = graphDbService.getMessageLog();
         this.graphDbService = graphDbService;
         IndexStore indexStore = graphDbInstance.getConfig().getIndexStore();
         this.indexManager = new IndexManagerImpl( this, indexStore );
@@ -207,6 +204,7 @@ class EmbeddedGraphDbImpl
         }
         catch ( RuntimeException cause )
         {
+            cause.printStackTrace();
             msgLog.logMessage( "Startup failed", cause );
             throw cause;
         }
@@ -217,11 +215,11 @@ class EmbeddedGraphDbImpl
         }
     }
 
-    private TxModule newTxModule( Map<String, String> inputParams, TxFinishHook rollbackHook )
+    private TxModule newTxModule( Map<String, String> inputParams, TxHook rollbackHook, StringLogger msgLog, FileSystemAbstraction fileSystem )
     {
         return Boolean.parseBoolean( inputParams.get( Config.READ_ONLY ) ) ? new TxModule( true,
                 kernelPanicEventGenerator ) : new TxModule( this.storeDir,
-                kernelPanicEventGenerator, rollbackHook, inputParams.get(Config.TXMANAGER_IMPLEMENTATION) );
+                kernelPanicEventGenerator, rollbackHook, msgLog, fileSystem, inputParams.get( Config.TXMANAGER_IMPLEMENTATION ) );
     }
 
     <T> Collection<T> getManagementBeans( Class<T> beanClass )
@@ -373,11 +371,6 @@ class EmbeddedGraphDbImpl
         }
     }
 
-    public Iterable<RelationshipType> getRelationshipTypes()
-    {
-        return graphDbInstance.getRelationshipTypes();
-    }
-
     /**
      * @throws TransactionFailureException if unable to start transaction
      */
@@ -427,69 +420,6 @@ class EmbeddedGraphDbImpl
     public String getStoreDir()
     {
         return storeDir;
-    }
-
-    public Iterable<Node> getAllNodes()
-    {
-        return new Iterable<Node>()
-        {
-            @Override
-            public Iterator<Node> iterator()
-            {
-                long highId = nodeManager.getHighestPossibleIdInUse( Node.class );
-                return new AllNodesIterator( highId );
-            }
-        };
-    }
-
-    // TODO: temporary all nodes getter, fix this with better implementation
-    // (no NotFoundException to control flow)
-    private class AllNodesIterator implements Iterator<Node>
-    {
-        private final long highId;
-        private long currentNodeId = 0;
-        private Node currentNode = null;
-
-        AllNodesIterator( long highId )
-        {
-            this.highId = highId;
-        }
-
-        @Override
-        public synchronized boolean hasNext()
-        {
-            while ( currentNode == null && currentNodeId <= highId )
-            {
-                try
-                {
-                    currentNode = getNodeById( currentNodeId++ );
-                }
-                catch ( NotFoundException e )
-                {
-                    // ok we try next
-                }
-            }
-            return currentNode != null;
-        }
-
-        @Override
-        public synchronized Node next()
-        {
-            if ( !hasNext() )
-            {
-                throw new NoSuchElementException();
-            }
-
-            Node nextNode = currentNode;
-            currentNode = null;
-            return nextNode;
-        }
-
-        @Override
-        public void remove()
-        {
-            throw new UnsupportedOperationException();
-        }
     }
 
     <T> TransactionEventHandler<T> registerTransactionEventHandler(

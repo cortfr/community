@@ -19,9 +19,9 @@
  */
 package org.neo4j.cypher.pipes.matching
 
-import org.neo4j.graphdb.{Path, Node, Relationship}
 import java.lang.IllegalArgumentException
 import scala.collection.JavaConverters._
+import org.neo4j.graphdb.{NotFoundException, Path, Node, Relationship}
 
 abstract class GraphRelationship {
   def getOtherNode(node: Node): Node
@@ -36,19 +36,17 @@ case class SingleGraphRelationship(rel: Relationship) extends GraphRelationship 
 
   override def equals(obj: Any) = obj match {
     case VariableLengthGraphRelationship(p) => p.relationships().asScala.exists(_ == rel)
+
     case p: Path => p.relationships().asScala.exists(_ == rel)
-    case x => {
-      val a = x == this
-      val b = x == rel
-      a || b
-    }
+    case x => x == this || x == rel
   }
 
-  override def toString = try {
-    rel.getProperty("name").toString
-  } catch {
-    case _ => rel.toString
-  }
+  override def toString =
+    try {
+      rel.getProperty("name").toString
+    } catch {
+      case e:NotFoundException => rel.toString
+    }
 }
 
 case class VariableLengthGraphRelationship(path: Path) extends GraphRelationship {
@@ -64,7 +62,7 @@ case class VariableLengthGraphRelationship(path: Path) extends GraphRelationship
 
   override def equals(obj: Any) = obj match {
     case r: Relationship => path.relationships().asScala.exists(_ == r)
-    case x => obj == this || obj == path
+    case x => obj == this || (obj == path && path.length() > 0)
   }
 
   override def toString = path.toString

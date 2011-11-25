@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 
 import org.neo4j.graphdb.GraphDatabaseService;
+import org.neo4j.graphdb.Transaction;
 import org.neo4j.visualization.graphviz.AsciiDocStyle;
 import org.neo4j.visualization.graphviz.GraphvizWriter;
 import org.neo4j.walk.Walker;
@@ -31,8 +32,8 @@ import org.neo4j.walk.Walker;
 public class AsciidocHelper
 {
 
-    private static final String ILLEGAL_STRINGS = "[:\\(\\)\t;&/\\\\]"; 
-    
+    private static final String ILLEGAL_STRINGS = "[:\\(\\)\t;&/\\\\]";
+
     public static String createGraphViz( String title, GraphDatabaseService graph, String identifier )
     {
         OutputStream out = new ByteArrayOutputStream();
@@ -45,9 +46,9 @@ public class AsciidocHelper
         {
             e.printStackTrace();
         }
-        
+
         String safeTitle = title.replaceAll(ILLEGAL_STRINGS, "");
-        
+
         return "." + title + "\n[\"dot\", \""
                + ( safeTitle + "-" + identifier ).replace( " ", "-" )
                + ".svg\", \"neoviz\"]\n" +
@@ -55,12 +56,28 @@ public class AsciidocHelper
                 out.toString() +
                 "----\n";
     }
-    
+
+    public static String createGraphVizDeletingReferenceNode( String title,
+            GraphDatabaseService graph, String identifier )
+    {
+        Transaction tx = graph.beginTx();
+        try
+        {
+            graph.getReferenceNode().delete();
+            tx.success();
+        }
+        finally
+        {
+            tx.finish();
+        }
+        return AsciidocHelper.createGraphViz( title, graph, identifier );
+    }
+
     public static String createOutputSnippet( final String output )
     {
         return "[source]\n----\n"+output+"\n----\n";
     }
-    
+
     public static String createQueryResultSnippet( final String output )
     {
         return "[queryresult]\n----\n" + output + "\n----\n";
@@ -68,14 +85,29 @@ public class AsciidocHelper
 
     public static String createCypherSnippet( final String query )
     {
-        return "[source,cypher]\n----\n"+query.
-                replace("start ", "START ").
-                replace("where ", "WHERE ").
-                replace("match ", "MATCH ").
-                replace("return ", "RETURN ").
-                replace(" MATCH ", "\nMATCH ").
-                replace(" RETURN ", "\nRETURN ").
-                replace(" WHERE ", "\nWHERE ").
-                replace("where ", "WHERE ")+"\n----\n";
+        String[] keywordsToBreakOn = new String[] {"start", "match", "where", "return", "skip", "limit", "order by",
+                "asc", "ascending", "desc", "descending"};
+
+        String result = "[source,cypher]\n----\n" + query + "\n----\n";
+
+        for(String keyword : keywordsToBreakOn)
+        {
+            String upperKeyword = keyword.toUpperCase();
+            result = result.
+                    replace(keyword, upperKeyword).
+                    replace(" " + upperKeyword + " ", "\n" + upperKeyword + " ");
+        }
+
+        //cut to max 123 chars for PDF compliance
+        String[] lines = result.split( "\n" );
+        String finalRes = "";
+        for(String line : lines) {
+            line = line.trim();
+            if (line.length() > 123 ) {
+                line = line.replaceAll( ", ", ",\n      " );
+            }
+            finalRes += line + "\n";
+        }
+        return finalRes;
     }
 }

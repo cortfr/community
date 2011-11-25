@@ -24,8 +24,9 @@ import java.io.IOException;
 import org.junit.Test;
 import org.neo4j.server.helpers.ServerBuilder;
 import org.neo4j.server.startup.healthcheck.StartupHealthCheckFailedException;
+import org.neo4j.test.server.ExclusiveServerTestBase;
 
-public class StartupHealthcheckFunctionalTest
+public class StartupHealthcheckFunctionalTest extends ExclusiveServerTestBase
 {
 
     private NeoServer server;

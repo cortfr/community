@@ -25,8 +25,7 @@ import java.io.IOException;
 import java.io.Writer;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.logging.Logger;
 
 import org.neo4j.graphdb.GraphDatabaseService;
 
@@ -37,22 +36,21 @@ import org.neo4j.graphdb.GraphDatabaseService;
  * 
  * The filename of the resulting ASCIIDOC test file is derived from the title.
  * 
- * The title is determined by either a JavaDoc perioed terminated first title
+ * The title is determined by either a JavaDoc period terminated first title
  * line, the @Title annotation or the method name, where "_" is replaced by " ".
  */
 public abstract class AsciiDocGenerator
 {
     private static final String DOCUMENTATION_END = "\n...\n";
-
-    protected String title = null;
+    private Logger log = Logger.getLogger( AsciiDocGenerator.class.getName() );
+    protected final String title;
+    protected String section;
     protected String description = null;
     protected GraphDatabaseService graph;
     protected static final String SNIPPET_MARKER = "@@";
     protected Map<String, String> snippets = new HashMap<String, String>();
 
     public File out;
-
-    protected String section;
 
     public AsciiDocGenerator( final String title, final String section )
     {
@@ -112,10 +110,6 @@ public abstract class AsciiDocGenerator
         return this;
     }
 
-
-    protected abstract void writeEntity( final FileWriter fw,
-            final String entity ) throws IOException;
-
     protected void line( final Writer fw, final String string )
             throws IOException
     {
@@ -168,27 +162,34 @@ public abstract class AsciiDocGenerator
     }
     protected String replaceSnippets( String description )
     {
-        String result = description;
-        if ( description.contains( SNIPPET_MARKER ) )
-        {
-            Pattern p = Pattern.compile( ".*" + SNIPPET_MARKER
-                                         + "([a-zA-Z_\\-0-9]*).*" );
-            Matcher m = p.matcher( description );
-            m.find();
-            String group = m.group( 1 );
-            if ( !snippets.containsKey( group ) )
-            {
-                throw new Error( "No snippet '" + group + "' found." );
-            }
-            result = description.replace( SNIPPET_MARKER + group,
-                    snippets.get( group ) );
-            result = replaceSnippets( result );
+        for (String key : snippets.keySet()) {
+            description = replaceSnippet( description, key );
         }
-        return result;
+        if(description.contains( SNIPPET_MARKER )) {
+            int indexOf = description.indexOf( "@@" );
+            String snippet = description.substring( indexOf, description.indexOf( "\n", indexOf ) );
+            log.severe( "missing snippet ["+snippet+"] in " + description);
+        }
+        return description;
+    }
+
+    private String replaceSnippet( String description, String key )
+    {
+        String snippetString = SNIPPET_MARKER+key;
+        if ( description.contains( snippetString + "\n") )
+        {
+            description = description.replace( snippetString + "\n",
+                    snippets.get( key ) );
+        } else {
+            log.severe( "could not find " + snippetString + "\\n in "+ description );
+        }
+        return description;
     }
 
     /**
-     * Add snippets that will be replaced into corresponding
+     * Add snippets that will be replaced into corresponding.
+     * 
+     * A snippet needs to be on its own line, terminated by "\n".
      * 
      * @@snippetname placeholders in the content of the description.
      * 
@@ -225,7 +226,7 @@ public abstract class AsciiDocGenerator
             path += dir + "/";
         }
         path += "src/test/java/" + getPath( source );
-        path += "[" + source.getSimpleName() + ".java]";
+        path += "[" + source.getSimpleName() + ".java]\n";
         addSnippet( key, path );
     }
 }

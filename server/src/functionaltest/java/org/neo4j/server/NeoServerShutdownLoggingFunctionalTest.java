@@ -29,15 +29,16 @@ import org.junit.Before;
 import org.junit.Test;
 import org.neo4j.server.helpers.ServerHelper;
 import org.neo4j.server.logging.InMemoryAppender;
+import org.neo4j.test.server.ExclusiveServerTestBase;
 
-public class NeoServerShutdownLoggingFunctionalTest
+public class NeoServerShutdownLoggingFunctionalTest extends ExclusiveServerTestBase
 {
-    private NeoServerWithEmbeddedWebServer server;
+    private NeoServer server;
 
     @Before
     public void setupServer() throws IOException
     {
-        server = ServerHelper.createServer();
+        server = ServerHelper.createServer( true );
         ServerHelper.cleanTheDatabase( server );
     }
 

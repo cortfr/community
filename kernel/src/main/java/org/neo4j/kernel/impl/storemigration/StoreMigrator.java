@@ -21,7 +21,6 @@ package org.neo4j.kernel.impl.storemigration;
 
 import static org.neo4j.kernel.impl.nioneo.store.PropertyStore.encodeString;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -42,12 +41,12 @@ import org.neo4j.kernel.impl.nioneo.store.RelationshipTypeStore;
 import org.neo4j.kernel.impl.storemigration.legacystore.LegacyDynamicRecord;
 import org.neo4j.kernel.impl.storemigration.legacystore.LegacyDynamicRecordFetcher;
 import org.neo4j.kernel.impl.storemigration.legacystore.LegacyDynamicStoreReader;
+import org.neo4j.kernel.impl.storemigration.legacystore.LegacyNeoStoreReader;
 import org.neo4j.kernel.impl.storemigration.legacystore.LegacyPropertyIndexStoreReader;
 import org.neo4j.kernel.impl.storemigration.legacystore.LegacyPropertyRecord;
 import org.neo4j.kernel.impl.storemigration.legacystore.LegacyRelationshipTypeStoreReader;
 import org.neo4j.kernel.impl.storemigration.legacystore.LegacyStore;
 import org.neo4j.kernel.impl.storemigration.monitoring.MigrationProgressMonitor;
-import org.neo4j.kernel.impl.util.FileUtils;
 
 public class StoreMigrator
 {
@@ -60,7 +59,9 @@ public class StoreMigrator
 
     public void migrate( LegacyStore legacyStore, NeoStore neoStore ) throws IOException
     {
+        progressMonitor.started();
         new Migration( legacyStore, neoStore ).migrate();
+        progressMonitor.finished();
     }
 
     protected class Migration
@@ -79,13 +80,30 @@ public class StoreMigrator
 
         private void migrate() throws IOException
         {
+            migrateNeoStore( neoStore );
             migrateNodes( neoStore.getNodeStore(), new PropertyWriter( neoStore.getPropertyStore() ) );
             migrateRelationships( neoStore.getRelationshipStore(), new PropertyWriter( neoStore.getPropertyStore() ) );
             migratePropertyIndexes( neoStore.getPropertyStore().getIndexStore() );
             legacyStore.getPropertyStoreReader().close();
             migrateRelationshipTypes( neoStore.getRelationshipTypeStore() );
-//        migrateIdGenerators( neoStore );
-            legacyStore.getDynamicRecordFetcher().close();
+            legacyStore.close();
+        }
+
+        private void migrateNeoStore( NeoStore neoStore )
+        {
+            LegacyNeoStoreReader neoStoreReader = legacyStore.getNeoStoreReader();
+
+            neoStore.setCreationTime( neoStoreReader.getCreationTime() );
+            neoStore.setRandomNumber( neoStoreReader.getRandomNumber() );
+            neoStore.setVersion( neoStoreReader.getVersion() );
+            updateLastCommittedTxInSimulatedRecoveredStatus( neoStore, neoStoreReader.getLastCommittedTx() );
+        }
+
+        private void updateLastCommittedTxInSimulatedRecoveredStatus( NeoStore neoStore, long lastCommittedTx )
+        {
+            neoStore.setRecoveredStatus( true );
+            neoStore.setLastCommittedTx( lastCommittedTx );
+            neoStore.setRecoveredStatus( false );
         }
 
         private void migrateNodes( NodeStore nodeStore, PropertyWriter propertyWriter ) throws IOException
@@ -240,16 +258,6 @@ public class StoreMigrator
                 record.addKeyRecord( keyRecord );
             }
             propIndexStore.updateRecord( record );
-        }
-
-        private void migrateIdGenerators( NeoStore neoStore ) throws IOException
-        {
-            String[] idGeneratorSuffixes = new String[]{".nodestore.db.id", ".relationshipstore.db.id"};
-            for ( String suffix : idGeneratorSuffixes )
-            {
-                FileUtils.copyFile( new File( legacyStore.getStorageFileName() + suffix ),
-                        new File( neoStore.getStorageFileName() + suffix ) );
-            }
         }
     }
 }

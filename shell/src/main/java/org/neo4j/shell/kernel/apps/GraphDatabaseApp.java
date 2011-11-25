@@ -23,6 +23,7 @@ import java.lang.reflect.Array;
 import java.rmi.RemoteException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +56,7 @@ import org.neo4j.shell.TextUtil;
 import org.neo4j.shell.impl.AbstractApp;
 import org.neo4j.shell.impl.AbstractClient;
 import org.neo4j.shell.kernel.GraphDatabaseShellServer;
+import org.neo4j.tooling.GlobalGraphOperations;
 
 /**
  * An implementation of {@link App} which has common methods and functionality
@@ -397,7 +399,7 @@ public abstract class GraphDatabaseApp extends AbstractApp
         }
 
         StringBuilder result = new StringBuilder( "[" );
-        result.append( relationship.getType().name() );
+        result.append( ":" + relationship.getType().name() );
         result.append( verbose ? "," + relationship.getId() : "" );
         result.append( "]" );
         return result.toString();
@@ -407,11 +409,11 @@ public abstract class GraphDatabaseApp extends AbstractApp
     {
         if ( relationship.getStartNode().equals( leftNode ) )
         {
-            return " --" + displayName + "-> ";
+            return "-" + displayName + "->";
         }
         else if ( relationship.getEndNode().equals( leftNode ) )
         {
-            return " <-" + displayName + "-- ";
+            return "<-" + displayName + "-";
         }
         throw new IllegalArgumentException( leftNode + " is neither start nor end node to " + relationship );
     }
@@ -626,7 +628,7 @@ public abstract class GraphDatabaseApp extends AbstractApp
             boolean looseFilters ) throws ShellException
     {
         Map<String, Direction> matches = new TreeMap<String, Direction>();
-        for ( RelationshipType type : db.getRelationshipTypes() )
+        for ( RelationshipType type : GlobalGraphOperations.at( db ).getAllRelationshipTypes() )
         {
             Direction direction = null;
             if ( filterMap == null || filterMap.isEmpty() )
@@ -662,6 +664,7 @@ public abstract class GraphDatabaseApp extends AbstractApp
         Map<String, Direction> matches = filterMapToTypes( db, defaultDirection, relationshipTypes,
                 caseInsensitiveFilters, looseFilters );
         Expander expander = Traversal.emptyExpander();
+        if ( matches == null ) return EMPTY_EXPANDER;
         for ( Map.Entry<String, Direction> entry : matches.entrySet() )
         {
             expander = expander.add( DynamicRelationshipType.withName( entry.getKey() ),
@@ -684,4 +687,19 @@ public abstract class GraphDatabaseApp extends AbstractApp
         }
         return expander;
     }
+
+    private static final RelationshipExpander EMPTY_EXPANDER = new RelationshipExpander()
+    {
+        @Override
+        public RelationshipExpander reversed()
+        {
+            return this;
+        }
+        
+        @Override
+        public Iterable<Relationship> expand( Node node )
+        {
+            return Collections.emptyList();
+        }
+    };
 }

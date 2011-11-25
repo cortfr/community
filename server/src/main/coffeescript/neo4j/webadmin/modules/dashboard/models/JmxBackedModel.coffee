@@ -41,16 +41,26 @@ define ['lib/backbone'], () ->
       @interval = setInterval(@fetch, ms)
 
     fetch : =>
-      parseBean = @parseBean
       for key, def of @beans
-        @jmx.getBean def.domain, def.name, @parseBean
+        @jmx.getBean def.domain, def.name, @beanParser(key)
 
-    parseBean : (bean) =>
-      if bean? and bean.attributes?
-        @dataAvailable = true
-        values = {}
-        for attribute in bean.attributes
-          values[attribute.name] = attribute.value
+    beanParser : (key) ->
+      (bean) =>
+        if bean? and bean.attributes?
+          @setBeanDataAvailable key
+          values = {}
+          for attribute in bean.attributes
+            values[attribute.name] = attribute.value
 
-        @set(values)
-
+          update = {}
+          update[key] = values
+          @set(update)
+    
+    setBeanDataAvailable : (key) ->
+      @beans[key].dataAvailable = true
+      dataAvailable = true
+      for k,b of @beans
+        if not b.dataAvailable
+          dataAvailable = false
+          break            
+      @dataAvailable = dataAvailable

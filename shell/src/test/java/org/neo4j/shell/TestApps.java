@@ -233,11 +233,10 @@ public class TestApps extends AbstractShellTest
         executeCommand( "cd " + relationships[0].getEndNode().getId() );
 
         // Delete the relationship and node we're standing on
-        Transaction tx = db.beginTx();
+        beginTx();
         relationships[0].getEndNode().delete();
         relationships[0].delete();
-        tx.success();
-        tx.finish();
+        finishTx();
 
         Relationship[] otherRelationships = createRelationshipChain( 1 );
         executeCommand( "pwd", "\\(0\\)-->\\(\\?\\)" );
@@ -266,5 +265,48 @@ public class TestApps extends AbstractShellTest
         executeCommand( server, client, "cd -a " + node.getId() );
         executeCommand( server, client, "ls", "Test" );
         newDb.shutdown();
+    }
+    
+    @Test
+    public void cypherWithSelfParameter() throws Exception
+    {
+        String nodeOneName = "Node ONE";
+        String name = "name";
+        String nodeTwoName = "Node TWO";
+        String relationshipName = "The relationship";
+        
+        beginTx();
+        Node node = db.createNode();
+        node.setProperty( name, nodeOneName );
+        Node otherNode = db.createNode();
+        otherNode.setProperty( name, nodeTwoName );
+        Relationship relationship = node.createRelationshipTo( otherNode, RELATIONSHIP_TYPE );
+        relationship.setProperty( name, relationshipName );
+        finishTx();
+        
+        executeCommand( "cd -a " + node.getId() );
+        executeCommand( "START n = node({self}) RETURN n.name", nodeOneName );
+        executeCommand( "cd -r " + relationship.getId() );
+        executeCommand( "START r = relationship({self}) RETURN r.name", relationshipName );
+        executeCommand( "cd " + otherNode.getId() );
+        executeCommand( "START n = node({self}) RETURN n.name", nodeTwoName );
+    }
+    
+    @Test
+    public void filterProperties() throws Exception
+    {
+        beginTx();
+        Node node = db.createNode();
+        node.setProperty( "name", "Mattias" );
+        node.setProperty( "blame", "Someone else" );
+        finishTx();
+        
+        executeCommand( "cd -a " + node.getId() );
+        executeCommand( "ls", "Mattias" );
+        executeCommand( "ls -pf name", "Mattias", "!Someone else" );
+        executeCommand( "ls -f name", "Mattias", "!Someone else" );
+        executeCommand( "ls -f blame", "!Mattias", "Someone else" );
+        executeCommand( "ls -pf .*ame", "Mattias", "Someone else" );
+        executeCommand( "ls -f .*ame", "Mattias", "Someone else" );
     }
 }

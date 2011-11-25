@@ -25,26 +25,24 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Map;
 
-import org.junit.AfterClass;
+import javax.ws.rs.core.Response.Status;
+
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Relationship;
-import org.neo4j.server.WrappingNeoServerBootstrapper;
+import org.neo4j.helpers.Pair;
 import org.neo4j.server.rest.domain.JsonHelper;
 import org.neo4j.server.rest.web.PropertyValueException;
 import org.neo4j.test.GraphDescription;
 import org.neo4j.test.GraphHolder;
-import org.neo4j.test.ImpermanentGraphDatabase;
 import org.neo4j.test.TestData;
+import org.neo4j.test.server.SharedServerTestBase;
 import org.neo4j.visualization.asciidoc.AsciidocHelper;
 
-public class AbstractRestFunctionalTestBase implements GraphHolder
+public class AbstractRestFunctionalTestBase extends SharedServerTestBase implements GraphHolder
 {
-
-    static ImpermanentGraphDatabase graphdb;
     protected static final String NODES = "http://localhost:7474/db/data/node/";
 
     public @Rule
@@ -53,42 +51,82 @@ public class AbstractRestFunctionalTestBase implements GraphHolder
 
     public @Rule
     TestData<RESTDocsGenerator> gen = TestData.producedThrough( RESTDocsGenerator.PRODUCER );
-    protected static WrappingNeoServerBootstrapper server;
 
-    @BeforeClass
-    public static void startDatabase()
+    protected String doCypherRestCall( String endpoint, String script, Status status, Pair<String, String>... params ) {
+        data.get();
+        String parameterString = createParameterString( params );
+
+
+        String queryString = "{\"query\": \"" + createScript( script ) + "\"," + parameterString+"},"  ;
+
+        gen.get().expectedStatus( status.getStatusCode() ).payload(
+                queryString ).description(
+                AsciidocHelper.createCypherSnippet( script ) );
+        return gen.get().post( endpoint ).entity();
+    }
+    
+    protected String doGremlinRestCall( String endpoint, String script, Status status, Pair<String, String>... params ) {
+        data.get();
+        String parameterString = createParameterString( params );
+
+
+        String queryString = "{\"script\": \"" + createScript( script ) + "\"," + parameterString+"},"  ;
+
+        gen.get().expectedStatus( status.getStatusCode() ).payload(
+                queryString ).description(formatGroovy( createScript( script ) ) );
+        return gen.get().post( endpoint ).entity();
+    }
+    
+    protected String formatGroovy( String script )
     {
-        graphdb = new ImpermanentGraphDatabase( "target/db" );
-        server = new WrappingNeoServerBootstrapper( graphdb );
-        server.start();
+        script = script.replace( ";", "\n" );
+        if ( !script.endsWith( "\n" ) )
+        {
+            script += "\n";
+        }
+        return "_Raw script source_\n\n" + "[source, groovy]\n" + "----\n"
+               + script + "----\n";
+    }
+    
+    private Long idFor( String name ) {
+        return data.get().get( name ).getId();
+    }
+    
+    private String createParameterString( Pair<String, String>[] params ) {
+        String paramString = "\"params\": {";
+        for( Pair<String, String> param : params ) {
+            String delimiter = paramString.endsWith( "{" ) ? "" : ",";
 
+            paramString += delimiter + "\"" + param.first() + "\":\"" + param.other() + "\"";
+        }
+        paramString += "}";
+
+        return paramString;
     }
 
+    protected String createScript( String template ) {
+        for( String key : data.get().keySet() ) {
+            template = template.replace( "%" + key + "%", idFor( key ).toString() );
+        }
+        return template;
+    }
     
     protected String startGraph( String name )
     {
         return AsciidocHelper.createGraphViz( "Starting Graph", graphdb(), name);
     }
 
-  
-
     @Override
     public GraphDatabaseService graphdb()
     {
-        return graphdb;
+        return server().getDatabase().graph;
     }
 
     @Before
     public void cleanContent()
     {
-        graphdb.cleanContent();
-        gen.get().setGraph( graphdb );
-    }
-
-    @AfterClass
-    public static void shutdownServer()
-    {
-        server.stop();
+        cleanDatabase();
+        gen.get().setGraph( graphdb() );
     }
 
     protected String getDataUri()
@@ -157,6 +195,10 @@ public class AbstractRestFunctionalTestBase implements GraphHolder
     public String getPropertiesUri( Relationship rel )
     {
         return getRelationshipUri(rel)+  "/properties";
+    }
+    public String getPropertiesUri( Node node )
+    {
+        return getNodeUri(node)+  "/properties";
     }
     
     public RESTDocsGenerator gen() {
