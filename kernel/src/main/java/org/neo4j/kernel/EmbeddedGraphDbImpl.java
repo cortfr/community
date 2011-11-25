@@ -89,6 +89,7 @@ class EmbeddedGraphDbImpl
 
     private final IndexManagerImpl indexManager;
     private final StringLogger msgLog;
+    private final TransactionBuilder defaultTxBuilder = new ForcedTransactionBuilder();
 
     /**
      * A non-standard way of creating an embedded {@link GraphDatabaseService}
@@ -377,12 +378,12 @@ class EmbeddedGraphDbImpl
      */
     public Transaction beginTx()
     {
-        return beginTx( ForceMode.forced );
+        return tx().begin();
     }
 
     public TransactionBuilder tx()
     {
-        return new TransactionBuilderImpl( this );
+        return defaultTxBuilder;
     }
     
     Transaction beginTx( ForceMode forceMode )
@@ -511,5 +512,37 @@ class EmbeddedGraphDbImpl
     KernelData getKernelData()
     {
         return extensions;
+    }
+    
+    private class ForcedTransactionBuilder implements TransactionBuilder
+    {
+        private TransactionBuilder relaxedBuilder;
+        
+        @Override
+        public Transaction begin()
+        {
+            return beginTx( ForceMode.forced );
+        }
+
+        @Override
+        public TransactionBuilder relaxed()
+        {
+            return relaxedBuilder;
+        }
+    }
+
+    private class RelaxedTransactionBuilder implements TransactionBuilder
+    {
+        @Override
+        public Transaction begin()
+        {
+            return beginTx( ForceMode.relaxed );
+        }
+
+        @Override
+        public TransactionBuilder relaxed()
+        {
+            return this;
+        }
     }
 }
