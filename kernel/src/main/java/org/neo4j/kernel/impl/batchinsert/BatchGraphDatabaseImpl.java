@@ -34,6 +34,7 @@ import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.ReturnableEvaluator;
 import org.neo4j.graphdb.StopEvaluator;
 import org.neo4j.graphdb.Transaction;
+import org.neo4j.graphdb.TransactionBuilder;
 import org.neo4j.graphdb.Traverser;
 import org.neo4j.graphdb.Traverser.Order;
 import org.neo4j.graphdb.event.KernelEventHandler;
@@ -88,6 +89,25 @@ class BatchGraphDatabaseImpl implements GraphDatabaseService
     public Transaction beginTx()
     {
         return new FakeTransaction();
+    }
+    
+    @Override
+    public TransactionBuilder tx()
+    {
+        return new TransactionBuilder()
+        {
+            @Override
+            public TransactionBuilder relaxed()
+            {
+                return this;
+            }
+            
+            @Override
+            public Transaction begin()
+            {
+                return new FakeTransaction();
+            }
+        };
     }
 
     public Node createNode()

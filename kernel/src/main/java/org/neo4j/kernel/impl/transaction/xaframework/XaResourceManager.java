@@ -37,6 +37,7 @@ import javax.transaction.xa.XAException;
 import javax.transaction.xa.XAResource;
 import javax.transaction.xa.Xid;
 
+import org.neo4j.kernel.impl.transaction.AbstractTransactionManager;
 import org.neo4j.kernel.impl.util.ArrayMap;
 import org.neo4j.kernel.impl.util.StringLogger;
 
@@ -56,13 +57,15 @@ public class XaResourceManager
     private final TxIdGenerator txIdGenerator;
     private final XaDataSource dataSource;
     private StringLogger msgLog;
+    private final AbstractTransactionManager transactionManager;
 
     XaResourceManager( XaDataSource dataSource, XaTransactionFactory tf,
-            TxIdGenerator txIdGenerator, String name )
+            TxIdGenerator txIdGenerator, AbstractTransactionManager transactionManager, String name )
     {
         this.dataSource = dataSource;
         this.tf = tf;
         this.txIdGenerator = txIdGenerator;
+        this.transactionManager = transactionManager;
         this.name = name;
     }
 
@@ -414,7 +417,7 @@ public class XaResourceManager
                             xaTransaction.getIdentifier() );
                     xaTransaction.setCommitTxId( txId );
                     log.commitOnePhase( xaTransaction.getIdentifier(),
-                            xaTransaction.getCommitTxId() );
+                            xaTransaction.getCommitTxId(), getForceMode() );
                 }
             }
             txStatus.markAsPrepared();
@@ -434,7 +437,7 @@ public class XaResourceManager
                             xaTransaction.getIdentifier() );
                     xaTransaction.setCommitTxId( txId );
                     log.commitTwoPhase( xaTransaction.getIdentifier(),
-                            xaTransaction.getCommitTxId() );
+                            xaTransaction.getCommitTxId(), getForceMode() );
                 }
             }
             txStatus.markCommitStarted();
@@ -469,6 +472,12 @@ public class XaResourceManager
             checkIfRecoveryComplete();
         }
         return xaTransaction;
+    }
+
+    private ForceMode getForceMode()
+    {
+        // TODO A Hack :)
+        return transactionManager != null ? transactionManager.getForceMode() : ForceMode.forced;
     }
 
     synchronized XaTransaction rollback( Xid xid ) throws XAException
@@ -652,7 +661,7 @@ public class XaResourceManager
                 {
                     if ( !recoveredTx.isOnePhase() )
                     {
-                        log.commitTwoPhase( recoveredTx.getIdentifier(), recoveredTx.getTxId() );
+                        log.commitTwoPhase( recoveredTx.getIdentifier(), recoveredTx.getTxId(), getForceMode() );
                     }
                     log.doneInternal( recoveredTx.getIdentifier() );
                 }
@@ -713,7 +722,7 @@ public class XaResourceManager
     {
         long txId = TxIdGenerator.DEFAULT.generate( dataSource, 0 );
         int masterId = txIdGenerator.getCurrentMasterId();
-        log.applyTransactionWithoutTxId( transaction, txId, masterId );
+        log.applyTransactionWithoutTxId( transaction, txId, masterId, getForceMode() );
         return txId;
     }
 

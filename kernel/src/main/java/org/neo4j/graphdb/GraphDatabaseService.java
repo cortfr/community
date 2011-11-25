@@ -118,10 +118,23 @@ public interface GraphDatabaseService
 
     /**
      * Starts a new transaction and associates it with the current thread.
+     * It's a short-hand version of
+     * <pre>
+     * graphDb.tx().begin();
+     * </pre>
      * 
      * @return a new transaction instance
      */
     public Transaction beginTx();
+    
+    /**
+     * Returns a new builder which can configure certain behaviors of the transaction
+     * which will be started with {@link TransactionBuilder#begin()}.
+     * 
+     * @return a builder for configuring transaction behavior and ultimately
+     * begin a transaction.
+     */
+    public TransactionBuilder tx();
     
     /**
      * Registers {@code handler} as a handler for transaction events which

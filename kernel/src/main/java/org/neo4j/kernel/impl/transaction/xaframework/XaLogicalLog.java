@@ -315,7 +315,7 @@ public class XaLogicalLog
     }
 
     // [TX_1P_COMMIT][identifier]
-    public synchronized void commitOnePhase( int identifier, long txId )
+    public synchronized void commitOnePhase( int identifier, long txId, ForceMode forceMode )
         throws XAException
     {
         LogEntry.Start startEntry = xidIdentMap.get( identifier );
@@ -324,7 +324,7 @@ public class XaLogicalLog
         try
         {
             LogIoUtils.writeCommit( false, writeBuffer, identifier, txId, System.currentTimeMillis() );
-            ForceMode.selected.force( writeBuffer );
+            forceMode.force( writeBuffer );
             cacheTxStartPosition( txId, startEntry.getMasterId(), startEntry );
         }
         catch ( IOException e )
@@ -392,7 +392,7 @@ public class XaLogicalLog
     }
 
     // [TX_2P_COMMIT][identifier]
-    public synchronized void commitTwoPhase( int identifier, long txId )
+    public synchronized void commitTwoPhase( int identifier, long txId, ForceMode forceMode )
         throws XAException
     {
         LogEntry.Start startEntry = xidIdentMap.get( identifier );
@@ -401,7 +401,7 @@ public class XaLogicalLog
         try
         {
             LogIoUtils.writeCommit( true, writeBuffer, identifier, txId, System.currentTimeMillis() );
-            ForceMode.selected.force( writeBuffer );
+            forceMode.force( writeBuffer );
             cacheTxStartPosition( txId, startEntry.getMasterId(), startEntry );
         }
         catch ( IOException e )
@@ -1421,7 +1421,7 @@ public class XaLogicalLog
     }
 
     public synchronized void applyTransactionWithoutTxId( ReadableByteChannel byteChannel,
-            long nextTxId, int masterId ) throws IOException
+            long nextTxId, int masterId, ForceMode forceMode ) throws IOException
     {
         if ( nextTxId != (xaTf.getLastCommittedTx() + 1) )
         {
@@ -1454,7 +1454,7 @@ public class XaLogicalLog
                 xidIdent, nextTxId, System.currentTimeMillis() );
         LogIoUtils.writeLogEntry( commit, writeBuffer );
         // need to manually force since xaRm.commit will not do it (transaction marked as recovered)
-        ForceMode.selected.force( writeBuffer );
+        forceMode.force( writeBuffer );
         Xid xid = startEntry.getXid();
         try
         {

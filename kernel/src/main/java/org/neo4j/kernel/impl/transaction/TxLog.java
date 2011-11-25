@@ -186,12 +186,12 @@ public class TxLog
      */
     // mark_committing(byte)|gid_length(byte)|globalId
     // forces
-    public synchronized void markAsCommitting( byte globalId[] )
+    public synchronized void markAsCommitting( byte globalId[], ForceMode forceMode )
         throws IOException
     {
         assertNotNull( globalId, "global id" );
         logBuffer.put( MARK_COMMIT ).put( (byte) globalId.length ).put( globalId );
-        ForceMode.selected.force( logBuffer );
+        forceMode.force( logBuffer );
         recordCount++;
     }
 
@@ -280,7 +280,7 @@ public class TxLog
         }
     }
 
-    void writeRecord( Record record ) throws IOException
+    void writeRecord( Record record, ForceMode forceMode ) throws IOException
     {
         if ( record.getType() == TX_START )
         {
@@ -292,7 +292,7 @@ public class TxLog
         }
         else if ( record.getType() == MARK_COMMIT )
         {
-            markAsCommitting( record.getGlobalId() );
+            markAsCommitting( record.getGlobalId(), forceMode );
         }
         else
         {
@@ -443,7 +443,7 @@ public class TxLog
 
     /**
      * Switches log file. Copies the dangling records in current log file to the
-     * <CODE>newFile</CODE> and the makes the switch closing the old log file.
+     * <CODE>newFile</CODE> and then makes the switch closing the old log file.
      * 
      * @param newFile
      *            The filename of the new file to switch to
@@ -482,7 +482,7 @@ public class TxLog
         while ( recordItr.hasNext() )
         {
             Record record = recordItr.next();
-            writeRecord( record );
+            writeRecord( record, ForceMode.forced );
         }
         force();
     }

@@ -32,6 +32,7 @@ import org.neo4j.graphdb.RelationshipType;
 import org.neo4j.graphdb.ReturnableEvaluator;
 import org.neo4j.graphdb.StopEvaluator;
 import org.neo4j.graphdb.Transaction;
+import org.neo4j.graphdb.TransactionBuilder;
 import org.neo4j.graphdb.Traverser;
 import org.neo4j.graphdb.Traverser.Order;
 import org.neo4j.graphdb.event.KernelEventHandler;
@@ -48,6 +49,21 @@ import org.neo4j.kernel.impl.traversal.OldTraverserWrapper;
 
 public class ReadOnlyGraphDatabaseProxy implements GraphDatabaseService, IndexManager
 {
+    private final TransactionBuilder defaultBuilder = new TransactionBuilder()
+    {
+        @Override
+        public TransactionBuilder relaxed()
+        {
+            return this;
+        }
+        
+        @Override
+        public Transaction begin()
+        {
+            return beginTx();
+        }
+    };
+    
     private final GraphDatabaseService actual;
 
     ReadOnlyGraphDatabaseProxy( GraphDatabaseService graphDb )
@@ -92,6 +108,12 @@ public class ReadOnlyGraphDatabaseProxy implements GraphDatabaseService, IndexMa
             {
             }
         };
+    }
+    
+    @Override
+    public TransactionBuilder tx()
+    {
+        return defaultBuilder;
     }
 
     public Node createNode()

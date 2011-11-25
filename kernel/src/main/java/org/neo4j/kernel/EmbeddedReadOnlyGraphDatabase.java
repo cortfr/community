@@ -27,6 +27,7 @@ import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Relationship;
 import org.neo4j.graphdb.Transaction;
+import org.neo4j.graphdb.TransactionBuilder;
 import org.neo4j.graphdb.TransactionFailureException;
 import org.neo4j.graphdb.event.KernelEventHandler;
 import org.neo4j.graphdb.event.TransactionEventHandler;
@@ -130,6 +131,12 @@ public final class EmbeddedReadOnlyGraphDatabase extends AbstractGraphDatabase
     public Transaction beginTx()
     {
         return graphDbImpl.beginTx();
+    }
+    
+    @Override
+    public TransactionBuilder tx()
+    {
+        return graphDbImpl.tx();
     }
 
     /**

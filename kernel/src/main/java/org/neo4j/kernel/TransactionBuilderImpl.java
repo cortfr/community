@@ -17,28 +17,37 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-package org.neo4j.kernel.impl.transaction.xaframework;
+package org.neo4j.kernel;
 
-import java.io.IOException;
+import org.neo4j.graphdb.Transaction;
+import org.neo4j.graphdb.TransactionBuilder;
+import org.neo4j.kernel.impl.transaction.xaframework.ForceMode;
 
-public enum ForceMode
+public class TransactionBuilderImpl implements TransactionBuilder
 {
-    forced
-    {
-        @Override
-        public void force( LogBuffer buffer ) throws IOException
-        {
-            buffer.force();
-        }
-    },
-    relaxed
-    {
-        @Override
-        public void force( LogBuffer buffer ) throws IOException
-        {
-            buffer.writeOut();
-        }
-    };
+    private ForceMode forceMode;
+    private final EmbeddedGraphDbImpl db;
     
-    public abstract void force( LogBuffer buffer ) throws IOException;
+    TransactionBuilderImpl( EmbeddedGraphDbImpl db )
+    {
+        this( db, ForceMode.forced );
+    }
+    
+    TransactionBuilderImpl( EmbeddedGraphDbImpl db, ForceMode forceMode )
+    {
+        this.db = db;
+        this.forceMode = forceMode;
+    }
+    
+    @Override
+    public Transaction begin()
+    {
+        return db.beginTx( forceMode );
+    }
+
+    @Override
+    public TransactionBuilder relaxed()
+    {
+        return new TransactionBuilderImpl( db, ForceMode.relaxed );
+    }
 }

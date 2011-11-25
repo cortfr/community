@@ -35,13 +35,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.logging.Logger;
 
-import javax.transaction.TransactionManager;
-
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.NotFoundException;
 import org.neo4j.graphdb.Relationship;
 import org.neo4j.graphdb.Transaction;
+import org.neo4j.graphdb.TransactionBuilder;
 import org.neo4j.graphdb.TransactionFailureException;
 import org.neo4j.graphdb.event.KernelEventHandler;
 import org.neo4j.graphdb.event.TransactionEventHandler;
@@ -57,9 +56,11 @@ import org.neo4j.kernel.impl.core.TxEventSyncHookFactory;
 import org.neo4j.kernel.impl.index.IndexStore;
 import org.neo4j.kernel.impl.nioneo.store.FileSystemAbstraction;
 import org.neo4j.kernel.impl.nioneo.store.StoreId;
+import org.neo4j.kernel.impl.transaction.AbstractTransactionManager;
 import org.neo4j.kernel.impl.transaction.LockManager;
 import org.neo4j.kernel.impl.transaction.TxHook;
 import org.neo4j.kernel.impl.transaction.TxModule;
+import org.neo4j.kernel.impl.transaction.xaframework.ForceMode;
 import org.neo4j.kernel.impl.transaction.xaframework.LogBufferFactory;
 import org.neo4j.kernel.impl.transaction.xaframework.TxIdGeneratorFactory;
 import org.neo4j.kernel.impl.util.StringLogger;
@@ -376,6 +377,16 @@ class EmbeddedGraphDbImpl
      */
     public Transaction beginTx()
     {
+        return beginTx( ForceMode.forced );
+    }
+
+    public TransactionBuilder tx()
+    {
+        return new TransactionBuilderImpl( this );
+    }
+    
+    Transaction beginTx( ForceMode forceMode )
+    {
         if ( graphDbInstance.transactionRunning() )
         {
             if ( placeboTransaction == null )
@@ -385,11 +396,11 @@ class EmbeddedGraphDbImpl
             }
             return placeboTransaction;
         }
-        TransactionManager txManager = graphDbInstance.getTransactionManager();
+        AbstractTransactionManager txManager = (AbstractTransactionManager) graphDbInstance.getTransactionManager();
         Transaction result = null;
         try
         {
-            txManager.begin();
+            txManager.begin( forceMode );
             result = new TopLevelTransaction( txManager );
         }
         catch ( Exception e )
@@ -399,7 +410,7 @@ class EmbeddedGraphDbImpl
         }
         return result;
     }
-
+    
     /**
      * Returns a non-standard configuration object. Will most likely be removed
      * in future releases.
