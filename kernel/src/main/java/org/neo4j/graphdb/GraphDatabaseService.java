@@ -124,12 +124,18 @@ public interface GraphDatabaseService
      * </pre>
      * 
      * @return a new transaction instance
+     * @deprecated see {@link #tx()} instead. The equivalent is:
+     * <pre>
+     * tx().begin()
+     * </pre>
+     * because {@link #tx()} returns a {@link TransactionBuilder} where some
+     * aspects of the transaction can be controlled.
      */
     public Transaction beginTx();
     
     /**
-     * Returns a new builder which can configure certain behaviors of the transaction
-     * which will be started with {@link TransactionBuilder#begin()}.
+     * Returns a new builder where some aspects of the behavior can be configured.
+     * The transaction will ultimately begin when calling {@link TransactionBuilder#begin()}.
      * 
      * @return a builder for configuring transaction behavior and ultimately
      * begin a transaction.
