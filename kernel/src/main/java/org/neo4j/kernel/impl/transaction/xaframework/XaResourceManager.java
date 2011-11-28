@@ -661,7 +661,7 @@ public class XaResourceManager
                 {
                     if ( !recoveredTx.isOnePhase() )
                     {
-                        log.commitTwoPhase( recoveredTx.getIdentifier(), recoveredTx.getTxId(), getForceMode() );
+                        log.commitTwoPhase( recoveredTx.getIdentifier(), recoveredTx.getTxId(), ForceMode.forced );
                     }
                     log.doneInternal( recoveredTx.getIdentifier() );
                 }
